@@ -58,7 +58,11 @@ jobs:
           # the commit the tag points at, peeling an annotated tag
           obj="$(gh api "repos/$UPSTREAM_REPO/git/ref/tags/$tag" --jq '.object.type + " " + .object.sha')"
           sha="${obj##* }"
-          [ "${obj%% *}" = tag ] && sha="$(gh api "repos/$UPSTREAM_REPO/git/tags/$sha" --jq .object.sha)"
+          # an annotated tag names a tag object; the commit is what it points at. A lightweight tag names the
+          # commit directly.
+          if [ "${obj%% *}" = tag ]; then
+            sha="$(gh api "repos/$UPSTREAM_REPO/git/tags/$sha" --jq .object.sha)"
+          fi
           win_tag="${tag#v}-win1"
           if [ -n "$WANT_TAG" ]; then
             should=1
@@ -71,7 +75,7 @@ jobs:
             echo "upstream_tag=$tag"; echo "upstream_sha=$sha"; echo "win_tag=$win_tag"; echo "should_build=$should"
           } >> "$GITHUB_OUTPUT"
           echo "upstream $tag at ${sha:0:8}; should_build=$should"
-          [ "$should" = 0 ] && echo "release v$win_tag already exists here: nothing to do"
+          if [ "$should" = 0 ]; then echo "release v$win_tag already exists here: nothing to do"; fi
 
   windows:
     needs: resolve
