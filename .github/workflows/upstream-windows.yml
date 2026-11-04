@@ -18,6 +18,10 @@ on:
         description: "publish the release; uncheck to build the zip as an artifact only"
         type: boolean
         default: true
+      win_suffix:
+        description: "the fork suffix of the release tag: win1, win2 for a rebuilt release"
+        required: false
+        default: "win1"
 
 permissions:
   contents: write
@@ -46,6 +50,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           WANT_TAG: ${{ github.event.inputs.upstream_tag }}
+          WANT_SUFFIX: ${{ github.event.inputs.win_suffix }}
         run: |
           owner="${UPSTREAM_REPO%%/*}"; name="${UPSTREAM_REPO##*/}"
           if [ -n "$WANT_TAG" ]; then
@@ -63,7 +68,7 @@ jobs:
           if [ "${obj%% *}" = tag ]; then
             sha="$(gh api "repos/$UPSTREAM_REPO/git/tags/$sha" --jq .object.sha)"
           fi
-          win_tag="${tag#v}-win1"
+          win_tag="${tag#v}-${WANT_SUFFIX:-win1}"
           if [ -n "$WANT_TAG" ]; then
             should=1
           elif gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$win_tag" >/dev/null 2>&1; then
@@ -176,7 +181,8 @@ jobs:
           $z = [System.IO.Compression.ZipFile]::OpenRead($zip.FullName)
           $names = $z.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
           foreach ($need in 'bin/basalt.exe', 'bin/cudart64_13.dll', 'bin/cublas64_13.dll', 'bin/cublasLt64_13.dll',
-                           'serve/server.py', 'data/profiles', 'data/bench', 'tools/windows/setup_basalt.py', 'START-HERE.bat',
+                           'serve/server.py', 'data/profiles', 'data/bench', 'tools/windows/setup_basalt.py',
+                           'START-HERE.bat', 'TUNE-HERE.bat', 'basalt-helper.ps1',
                            'requirements.txt', 'VERSION', 'README-WINDOWS.md') {
             if (-not ($names | Where-Object { $_ -like "*/$need" -or $_ -like "*/$need/*" })) {
               Write-Error "the zip has no $need"; $z.Dispose(); exit 1
