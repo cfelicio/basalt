@@ -43,7 +43,7 @@ jobs:
           method: network
           # cublas and cudart are the runtime libraries the engine loads at start; the _dev packages are what
           # the build links against, and nvrtc is not used by the engine
-          sub-packages: '["nvcc", "cudart", "cudart_dev", "crt", "nvvm", "cublas", "cublas_dev", "visual_studio_integration"]'
+          sub-packages: '["nvcc", "cudart", "crt", "nvvm", "cublas_dev", "nvrtc_dev", "visual_studio_integration"]'
           use-github-cache: true
 
       - name: MSVC environment

@@ -523,7 +523,7 @@ def main() -> int:
     # 2. the engine binary
     engine = find_engine(ROOT, args.engine_bin)
     if engine is None:
-        say("engine", f"no {ENGINE_EXE} in bin\\ or build\\bin\\")
+        say("engine", f"no {ENGINE_EXE} in bin{os.sep} or build{os.sep}bin{os.sep}")
         if args.no_download:
             say("engine", "not downloading the release (--no-download)")
         elif plan:
