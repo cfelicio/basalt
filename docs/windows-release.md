@@ -30,6 +30,15 @@ The zip carries `bin/` (the four programs, the CUDA runtime `cudart64_13.dll` / 
 Blackwell card is all the machine needs. `tools/windows/package.ps1` assembles it, and the workflow checks that
 the zip carries the engine, the CUDA DLLs, `serve/server.py`, `data/profiles`, `START-HERE.bat` and `VERSION`.
 
+The CUDA runtime DLLs come from NVIDIA's own redistributable index, not from the toolkit on the build machine:
+`tools/windows/fetch_cuda_redist.ps1` reads `redistrib_<toolkit>.json`, checks the SHA-256 the index publishes
+for every file and writes the DLLs and a `REDIST.txt`, which `VERSION` copies, so a release says which
+`cuda_cudart` and `libcublas` it carries. A toolkit install is often dev-only (import libraries and headers, no
+DLLs), and which component names the installer accepts changes between toolkit versions.
+
+After packaging the workflow unpacks the zip and starts `bin/basalt.exe --help` with only `C:\Windows` on
+`PATH`: the libraries beside the binary have to be enough, which is the claim a user depends on.
+
 Making one:
 
     git tag v0.2.1-win1 && git push origin v0.2.1-win1        # publishes the release
