@@ -93,10 +93,12 @@ jobs:
 
       - name: The binaries answer
         run: |
-          ./build/bin/basalt.exe --help > help.txt
+          # the shipped programs are linked into <source>/bin (RUNTIME_OUTPUT_DIRECTORY in CMakeLists)
+          ./bin/basalt.exe --help > help.txt
           head -3 help.txt
-          ls -l build/bin/*.exe
-          test -s build/bin/basalt.exe
+          ls -l bin/*.exe
+          test -s bin/basalt.exe
+          test -s bin/basalt-vision.exe
 
       - name: AVX-512 stays inside the dispatched kernels
         run: python tools/check_isa_isolation.py build
@@ -127,7 +129,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: basalt-${{ steps.v.outputs.version }}-windows-x64-cuda13
-          path: dist/basalt-*.zip
+          path: |
+            dist/basalt-*.zip
+            dist/basalt-*.zip.SHA256SUMS
           if-no-files-found: error
           retention-days: 30
 

@@ -58,11 +58,16 @@ function Copy-Tree([string] $from, [string] $to, [string[]] $excludeParts = @())
     }
 }
 
-# ---- the binaries: the four programs the build produces, from build/bin (Ninja single-config)
-$binFrom = Join-Path $BuildDir 'bin'
-if (-not (Test-Path -LiteralPath $binFrom)) { $binFrom = $BuildDir }
-$exes = Get-ChildItem -LiteralPath $binFrom -Filter '*.exe' -File -ErrorAction SilentlyContinue
-if (-not $exes) { throw "no .exe files under ${binFrom}: build first (cmake --build build)" }
+# ---- the binaries: the shipped programs are linked into <source>/bin by CMakeLists (RUNTIME_OUTPUT_DIRECTORY);
+# a generator that keeps them under the build folder works too, so both are searched and the first wins.
+$binFrom = @((Join-Path $SourceDir 'bin'), (Join-Path $BuildDir 'bin'), $BuildDir) |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    Where-Object { Get-ChildItem -LiteralPath $_ -Filter '*.exe' -File -ErrorAction SilentlyContinue } |
+    Select-Object -First 1
+if (-not $binFrom) {
+    throw "no .exe files in $(Join-Path $SourceDir 'bin') or $(Join-Path $BuildDir 'bin'): build first (cmake --build build)"
+}
+$exes = Get-ChildItem -LiteralPath $binFrom -Filter '*.exe' -File
 $exes | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $root 'bin') -Force }
 
 # ---- the CUDA runtime: cudart and cuBLAS, the libraries the engine links. The toolkit keeps these
