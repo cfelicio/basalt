@@ -64,12 +64,14 @@ jobs:
       - name: Version
         id: v
         run: |
-          if [ "$GITHUB_REF" = "${GITHUB_REF#refs/tags/}" ]; then
-            v="$(git describe --tags --always --dirty | sed 's/^v//; s/-\([0-9]\+\)-g[0-9a-f]\+$/-dev\1/')"
-            tag=""
+          # a fork carries no upstream tags, so the version comes from CMakeLists plus the commit; a pushed
+          # tag is the version, and is what the release is named for
+          base="$(sed -n 's/^project(basalt VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt)"
+          sha="$(git rev-parse --short HEAD)"
+          if [ "$GITHUB_REF" != "${GITHUB_REF#refs/tags/}" ]; then
+            v="${GITHUB_REF_NAME#v}"; tag="$GITHUB_REF_NAME"
           else
-            v="${GITHUB_REF_NAME#v}"
-            tag="$GITHUB_REF_NAME"
+            v="${base:-0.0.0}-dev$sha"; tag=""
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -143,8 +145,10 @@ jobs:
             by release-windows.yml from $GITHUB_SHA. Unpack anywhere, run START-HERE.bat. SHA-256 in $(basename "$sums")." \
               --latest "$zip" "$sums" 2>/dev/null ||
             gh release upload "$TAG" "$zip" "$sums" --clobber
+            rel="$TAG"
           else
-            ref="$(git describe --tags --abbrev=0 --always 2>/dev/null || echo "$GITHUB_SHA")"
-            gh release upload "$ref" "$zip" "$sums" --clobber
+            # a manual run with publish: the newest release of this repository
+            rel="$(gh release view --latest --json tagName -q .tagName)"
+            gh release upload "$rel" "$zip" "$sums" --clobber
           fi
-          gh release view "${TAG:-$ref}" --json tagName,assets --jq '.tagName, (.assets[].name)'
+          gh release view "$rel" --json tagName,assets --jq '.tagName, (.assets[].name)'

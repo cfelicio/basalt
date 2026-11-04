@@ -35,6 +35,9 @@ Making one:
     git tag v0.2.1-win1 && git push origin v0.2.1-win1        # publishes the release
     gh workflow run release-windows.yml                        # builds the zip as an artifact, no release
 
+A fork carries none of the upstream's tags, so a build that is not a tag is named after the version in
+`CMakeLists.txt` and the commit: `basalt-0.2.1-dev617a7534-windows-x64-cuda13.zip`. A pushed tag is the version.
+
 The build is `CMAKE_BUILD_TYPE=Release` with `CMAKE_CUDA_ARCHITECTURES=120`, the configuration upstream's CI
 compiles and CPU-tests on every pull request. No compiler flag is added, so the binaries are the ones the
 upstream tests describe.
