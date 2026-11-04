@@ -116,7 +116,7 @@ jobs:
           $names = $z.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
           foreach ($need in 'bin/basalt.exe', 'bin/cudart64_13.dll', 'bin/cublas64_13.dll', 'bin/cublasLt64_13.dll',
                            'serve/server.py',
-                           'data/profiles', 'tools/windows/setup_basalt.py', 'START-HERE.bat', 'requirements.txt',
+                           'data/profiles', 'data/bench', 'tools/windows/setup_basalt.py', 'START-HERE.bat', 'requirements.txt',
                            'VERSION', 'README-WINDOWS.md') {
             if (-not ($names | Where-Object { $_ -like "*/$need" -or $_ -like "*/$need/*" })) {
               Write-Error "the zip has no $need"; $z.Dispose(); exit 1
