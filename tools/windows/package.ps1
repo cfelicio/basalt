@@ -129,6 +129,12 @@ foreach ($f in 'START-HERE.bat', 'requirements.txt', 'LICENSE', 'THIRD_PARTY_LIC
     if (-not (Test-Path -LiteralPath (Join-Path $SourceDir $f))) { throw "the release needs $f and it is not in $SourceDir" }
     Copy-Item -LiteralPath (Join-Path $SourceDir $f) -Destination $root -Force
 }
+# ---- the tuning menu at the release root, beside START-HERE; the files live under tools\windows
+foreach ($f in 'TUNE-HERE.bat', 'basalt-helper.ps1') {
+    $src = Join-Path $SourceDir (Join-Path 'tools\windows' $f)
+    if (-not (Test-Path -LiteralPath $src)) { throw "the release needs $f and it is not under $SourceDir\tools\windows" }
+    Copy-Item -LiteralPath $src -Destination $root -Force
+}
 if (Test-Path -LiteralPath (Join-Path $SourceDir 'README.md')) {
     Copy-Item -LiteralPath (Join-Path $SourceDir 'README.md') -Destination $root -Force
 }
@@ -189,6 +195,10 @@ Run it yourself, once it is set up:
 
 The server answers on http://127.0.0.1:8080 (OpenAI- and Anthropic-compatible API, and a web page). To stop it,
 press Ctrl+C in its window.
+
+Tune it to your machine: double-click **TUNE-HERE.bat** - a menu that measures the hardware, runs basalt-probe
+and merges its suggestions into basalt_config.json, A/B-benchmarks KV formats and drafting settings, and starts
+the server. It uses the tools in bin and the fixtures in data\bench; nothing new to install.
 
 Models are tens of gigabytes. START-HERE.bat lists the packs with their sizes and only downloads the one you pick;
 put a .basalt file you already have in models\ and choose that.
