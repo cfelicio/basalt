@@ -24,6 +24,8 @@
 
     -CudaRedistDir points at the folder tools/windows/fetch_cuda_redist.ps1 fills from NVIDIA's redist index;
     it is searched before the installed toolkit, and VERSION records the package versions and hashes.
+    -Provenance adds lines to VERSION saying what the tree was built from, as the release for an upstream
+    version does: the fork's commit and the upstream tag and commit it was merged with.
 #>
 [CmdletBinding()]
 param(
@@ -33,6 +35,7 @@ param(
     [string] $Version = 'dev',
     [string] $Architecture = 'cuda13',
     [string] $CudaRedistDir = '',
+    [string[]] $Provenance = @(),
     [switch] $NoZip
 )
 
@@ -159,6 +162,7 @@ if ($CudaRedistDir) {
         $lines += (Get-Content -LiteralPath $redistFile -Encoding ascii | ForEach-Object { "runtime:    $_" })
     }
 }
+if ($Provenance) { $lines += $Provenance }
 $lines | Set-Content -LiteralPath (Join-Path $root 'VERSION') -Encoding ascii
 
 @'

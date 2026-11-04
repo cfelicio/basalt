@@ -162,21 +162,11 @@ jobs:
 
       - name: Package
         shell: pwsh
-        run: ./tools/windows/package.ps1 -SourceDir . -BuildDir build -OutDir dist -CudaRedistDir cuda-redist -Version '${{ needs.resolve.outputs.win_tag }}'
-
-      - name: Record what the zip was built from
-        shell: pwsh
-        run: |
-          # the tree is this fork's commit merged with upstream's tag, so the zip says both; the commit in
-          # VERSION is the merge commit this run made, and the release notes link the run that made it
-          $stage = (Get-ChildItem dist/stage-tmp -Directory -Filter 'basalt-*' -ErrorAction SilentlyContinue |
-                    Select-Object -First 1).FullName
-          if (-not $stage) { throw 'no staged tree to record: packaging did not run' }
-          @(
-            "upstream:   ${{ needs.resolve.outputs.upstream_tag }} (commit ${{ needs.resolve.outputs.upstream_sha }})",
-            "fork:       $env:GITHUB_SHA"
-          ) | Add-Content -LiteralPath (Join-Path $stage 'VERSION') -Encoding ascii
-          Get-Content (Join-Path $stage 'VERSION') | Select-Object -Last 3
+        run: >
+          ./tools/windows/package.ps1 -SourceDir . -BuildDir build -OutDir dist -CudaRedistDir cuda-redist
+          -Version '${{ needs.resolve.outputs.win_tag }}'
+          -Provenance @("upstream:   ${{ needs.resolve.outputs.upstream_tag }} (commit ${{ needs.resolve.outputs.upstream_sha }})",
+          "fork:       ${{ github.sha }}")
 
       - name: The zip is complete
         shell: pwsh
