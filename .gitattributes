@@ -2,3 +2,6 @@
 tests/data/native_experts/** -text
 # the table is checked byte for byte (tools/check_benchmarks.py), so it stays LF on every checkout
 docs/community/benchmarks.json text eol=lf
+# a batch file loses its labels and its goto when checked out with LF, so the Windows entry points are CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf

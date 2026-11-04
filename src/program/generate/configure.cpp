@@ -1,6 +1,8 @@
 #include "context.hpp"
 #include "run.hpp"
 
+#include "basalt/platform/system.hpp"
+
 namespace basalt::program::generate {
 
 int run(int argc, char** argv) {
@@ -37,7 +39,10 @@ int run(int argc, char** argv) {
             }
         } else {
             const std::string key = cli::profile_key(model_file.meta());
-            const std::string prof = std::string(BASALT_SOURCE_DIR) + "/data/profiles/" + key + ".prof";
+            // the profiles travel with the engine: the installed tree beside this binary, else the tree built in
+            const std::string prof =
+                basalt::platform::tree_root(basalt::platform::module_path(), BASALT_SOURCE_DIR) + "/data/profiles/" +
+                key + ".prof";
             if (!key.empty() && basalt::platform::file_size(prof, prof_bytes) && prof_bytes > 0) o.expert_profile = prof;
             else {
                 basalt::log::info("basalt generate", "no expert profile for %s", key.empty() ? "this model" : key.c_str());
