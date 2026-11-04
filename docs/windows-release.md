@@ -39,13 +39,25 @@ DLLs), and which component names the installer accepts changes between toolkit v
 After packaging the workflow unpacks the zip and starts `bin/basalt.exe --help` with only `C:\Windows` on
 `PATH`: the libraries beside the binary have to be enough, which is the claim a user depends on.
 
-Making one:
+Making one, the path verified end to end:
 
-    git tag v0.2.1-win1 && git push origin v0.2.1-win1        # publishes the release
-    gh workflow run release-windows.yml                        # builds the zip as an artifact, no release
+    git tag v0.2.1-win1
+    gh workflow run release-windows.yml --ref v0.2.1-win1     # builds from the tag and publishes the release
+
+The publish step names the release after the ref the run is on, so dispatching on a tag is what
+publishes. A manual run on a branch only uploads the zip as a workflow artifact:
+
+    gh workflow run release-windows.yml                        # the zip as an artifact, no release
+
+Pushing the tag is meant to trigger the same workflow on its own. On this repository it did not, with
+the tag itself in place: the tag reached GitHub and peels to the commit that carries the workflow, the
+workflow is active, and the runs for the `push` event stayed at the four runs of the pushes to `main`,
+with nothing queued. Nothing in the repository explains it. The published release was built from the
+tag by the dispatch, so the commit in `VERSION` and the release's tag agree; retest the tag push with
+the next tag.
 
 A fork carries none of the upstream's tags, so a build that is not a tag is named after the version in
-`CMakeLists.txt` and the commit: `basalt-0.2.1-dev617a7534-windows-x64-cuda13.zip`. A pushed tag is the version.
+`CMakeLists.txt` and the commit: `basalt-0.2.1-dev617a7534-windows-x64-cuda13.zip`. A tag is the version.
 
 The build is `CMAKE_BUILD_TYPE=Release` with `CMAKE_CUDA_ARCHITECTURES=120`, the configuration upstream's CI
 compiles and CPU-tests on every pull request. No compiler flag is added, so the binaries are the ones the
