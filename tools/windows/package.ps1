@@ -65,19 +65,28 @@ $exes = Get-ChildItem -LiteralPath $binFrom -Filter '*.exe' -File -ErrorAction S
 if (-not $exes) { throw "no .exe files under ${binFrom}: build first (cmake --build build)" }
 $exes | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $root 'bin') -Force }
 
-# ---- the CUDA runtime: cudart and cuBLAS, the libraries the engine links
-$cudaBin = $env:CUDA_PATH
-if (-not $cudaBin -or -not (Test-Path -LiteralPath (Join-Path $cudaBin 'bin'))) {
-    $cudaBin = Get-ChildItem 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA' -Directory -ErrorAction SilentlyContinue |
+# ---- the CUDA runtime: cudart and cuBLAS, the libraries the engine links. The toolkit keeps these
+# DLLs under bin, and its dev components put some of them under bin\x64 or x64.
+$cudaRoot = $env:CUDA_PATH
+if (-not $cudaRoot -or -not (Test-Path -LiteralPath $cudaRoot)) {
+    $cudaRoot = Get-ChildItem 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA' -Directory -ErrorAction SilentlyContinue |
         Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
 }
-if (-not $cudaBin -or -not (Test-Path -LiteralPath (Join-Path $cudaBin 'bin'))) { throw 'no CUDA toolkit found for the runtime DLLs' }
-$cudaPattern = @('cudart64_*.dll', 'cublas64_*.dll', 'cublasLt64_*.dll')
-$cudaDlls = $cudaPattern | ForEach-Object {
-    Get-ChildItem -LiteralPath (Join-Path $cudaBin 'bin') -Filter $_ -File -ErrorAction SilentlyContinue
+if (-not $cudaRoot -or -not (Test-Path -LiteralPath $cudaRoot)) { throw 'no CUDA toolkit found for the runtime DLLs' }
+$cudaDirs = @('bin', 'bin\x64', 'x64') | ForEach-Object { Join-Path $cudaRoot $_ } |
+    Where-Object { Test-Path -LiteralPath $_ }
+$cudaDlls = @('cudart64_*.dll', 'cublas64_*.dll', 'cublasLt64_*.dll') | ForEach-Object {
+    $pattern = $_
+    $cudaDirs | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter $pattern -File -ErrorAction SilentlyContinue }
+} | Sort-Object Name -Unique
+foreach ($need in 'cudart64_*.dll', 'cublas64_*.dll') {
+    if (-not ($cudaDlls | Where-Object { $_.Name -like $need })) {
+        $seen = ($cudaDirs | ForEach-Object {
+            (Get-ChildItem -LiteralPath $_ -Filter '*.dll' -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ' '
+        }) -join '; '
+        throw "no $need under the CUDA toolkit. searched: $($cudaDirs -join ', '). dlls there: $seen"
+    }
 }
-if (-not ($cudaDlls | Where-Object Name -like 'cudart64_*')) { throw "no cudart64_*.dll in $(Join-Path $cudaBin 'bin')" }
-if (-not ($cudaDlls | Where-Object Name -like 'cublas64_*')) { throw "no cublas64_*.dll in $(Join-Path $cudaBin 'bin')" }
 $cudaDlls | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $root 'bin') -Force }
 
 # ---- the MSVC runtime, so a machine with no Visual C++ redist installed still starts the engine

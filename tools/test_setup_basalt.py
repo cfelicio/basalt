@@ -93,13 +93,13 @@ class Release(unittest.TestCase):
             d = Path(d)
             zip_path = d / "basalt-1-windows-x64-cuda13.zip"
             with zipfile.ZipFile(zip_path, "w") as z:
-                z.writestr("basalt-1-windows-x64-cuda13/bin/basalt.exe", "exe")
+                z.writestr(f"basalt-1-windows-x64-cuda13/bin/{b.ENGINE_EXE}", "exe")
                 z.writestr("basalt-1-windows-x64-cuda13/serve/server.py", "server")
                 z.writestr("basalt-1-windows-x64-cuda13/VERSION", "version: 1")
                 z.writestr("basalt-1-windows-x64-cuda13/README-WINDOWS.md", "read me")
             root = d / "install"
             self.assertTrue(b.unpack_zip(zip_path, root))
-            self.assertTrue((root / "bin" / "basalt.exe").is_file())
+            self.assertTrue((root / "bin" / b.ENGINE_EXE).is_file())
             self.assertTrue((root / "serve" / "server.py").is_file())
             self.assertFalse((root / "VERSION").exists(), "the release notes are not copied over the tree")
 
@@ -166,22 +166,24 @@ class Settings(unittest.TestCase):
 
 
 class Engine(unittest.TestCase):
+    """The engine file is named per platform (basalt.exe, basalt); these tests run on both CI's OSes."""
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
+        self.engine = self.root / "bin" / b.ENGINE_EXE
 
     def tearDown(self):
         self._tmp.cleanup()
 
     def test_a_release_tree_is_found_before_a_build_tree(self):
-        for rel in ("build/bin/basalt.exe", "bin/basalt.exe"):
-            p = self.root / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text("exe", encoding="utf-8")
-        self.assertEqual(b.find_engine(self.root), (self.root / "bin" / "basalt.exe").resolve())
+        for rel in (self.root / "build" / "bin" / b.ENGINE_EXE, self.engine):
+            rel.parent.mkdir(parents=True, exist_ok=True)
+            rel.write_text("exe", encoding="utf-8")
+        self.assertEqual(b.find_engine(self.root), self.engine.resolve())
 
     def test_a_source_tree_build_is_found_when_there_is_no_install(self):
-        p = self.root / "build" / "bin" / "basalt.exe"
+        p = self.root / "build" / "bin" / b.ENGINE_EXE
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("exe", encoding="utf-8")
         self.assertEqual(b.find_engine(self.root), p.resolve())
