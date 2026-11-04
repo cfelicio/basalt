@@ -32,6 +32,7 @@
 #include "basalt/program/host_rates.hpp"
 #include "basalt/program/engine_session.hpp"
 #include "basalt/program/gpu_select.hpp"
+#include "basalt/program/tool_paths.hpp"
 
 #include <errno.h>
 
@@ -228,7 +229,7 @@ private:
 // ---------------------------------------------------------------------------------------------- options
 
 struct Options {
-    std::string engine, model, fixtures = BASALT_BENCH_FIXTURES, format = "md", logs, kld_base, power_label;
+    std::string engine, model, fixtures, format = "md", logs, kld_base, power_label;
     std::vector<std::pair<std::string, std::string>> sets;
     std::vector<std::string> passthrough;
     std::string spec;                    // --spec N: the engine argument of the same name
@@ -307,7 +308,7 @@ void usage(const std::string& engine) {
         "  --no-windows       do not ask the engine for the per-window log (no window statistics)\n"
         "  progress goes to stderr\n"
         "\n"
-        "fixtures (--fixtures DIR, default %s)\n"
+        "fixtures (--fixtures DIR, default: this installation's data/bench)\n"
         "  conv.ids struct.ids prose.ids   one line each: the comma-separated token ids of the chat-templated\n"
         "                                  prompt (thinking off, generation prompt added)\n"
         "  prefill.ids                     three lines: the ids before the body, the body, the ids after the body;\n"
@@ -324,10 +325,9 @@ void usage(const std::string& engine) {
         "      c=ChatTemplate('serve/chat_template.jinja'); r=lambda p: t.encode(c.render(\n"
         "      [{'role':'user','content':p}], enable_thinking=False), parse_special=True)\n"
         "      print(','.join(map(str, r(PROMPT))))\"\n"
-        "  (for prefill, render with a marker in place of the body and split the ids around it)\n",
-        BASALT_BENCH_FIXTURES);
+        "  (for prefill, render with a marker in place of the body and split the ids around it)\n");
     // the engine's flags are defined once, in the engine: print its own help
-    std::string bin = engine.empty() ? std::string(BASALT_BENCH_ENGINE) : engine;
+    std::string bin = engine.empty() ? basalt::program::default_engine_bin(BASALT_BENCH_ENGINE) : engine;
     if (!bin.empty() && fs::exists(bin)) {
         std::printf("\nEngine flags (passed to basalt):\n");
         std::fflush(stdout);
@@ -723,12 +723,12 @@ int main(int argc, char** argv) {
     if (!o.model.empty()) {
         args = {"--model", fs::absolute(o.model).string()};
     }
-    if (engine_bin.empty()) engine_bin = BASALT_BENCH_ENGINE;
-    if (o.engine.empty() && std::string(BASALT_BENCH_ENGINE).size() > 0 && fs::exists(BASALT_BENCH_ENGINE)) engine_bin = BASALT_BENCH_ENGINE;
+    if (engine_bin.empty()) engine_bin = basalt::program::default_engine_bin(BASALT_BENCH_ENGINE);
     if (engine_bin.empty() || !fs::exists(engine_bin)) {
         basalt::log::error("basalt-bench", "the engine binary %s does not exist (--engine BIN)", engine_bin.c_str());
         return 2;
     }
+    if (o.fixtures.empty()) o.fixtures = basalt::program::default_fixtures_dir(BASALT_BENCH_FIXTURES);
     for (const auto& kv : o.sets) set_arg(args, kv.first, kv.second);
     if (!o.spec.empty()) set_arg(args, "--spec", o.spec);
     if (o.model.empty()) for (const auto& a : o.passthrough) args.push_back(a);

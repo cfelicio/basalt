@@ -5,14 +5,25 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ENGINE = Path(os.environ.get("BASALT_BIN", ROOT / "bin" / "basalt"))
-BENCH = Path(os.environ.get("BASALT_BENCH_BIN", ROOT / "bin" / "basalt-bench"))
+
+
+def _bin(env: str, name: str) -> Path:
+    # a Windows build names its programs bin/<name>.exe; the env vars override either way
+    p = Path(os.environ.get(env, ROOT / "bin" / name))
+    if not p.is_file() and p.with_name(p.name + ".exe").is_file():
+        p = p.with_name(p.name + ".exe")
+    return p
+
+
+ENGINE = _bin("BASALT_BIN", "basalt")
+BENCH = _bin("BASALT_BENCH_BIN", "basalt-bench")
 # bench's own options that share an engine flag's name
 BENCH_OWNED = {"--help", "--model", "--engine", "--spec", "--set", "--seed", "--gpu"}
 
@@ -129,6 +140,35 @@ class BenchFlags(unittest.TestCase):
         r = subprocess.run([str(BENCH), "--help", "--engine", str(ENGINE)], capture_output=True, text=True)
         self.assertIn("Engine flags (passed to basalt):", r.stdout)
         self.assertIn("--max-context", r.stdout)
+
+
+@unittest.skipUnless(ENGINE.is_file() and BENCH.is_file(), "build bin/basalt and bin/basalt-bench first")
+class InstalledTreeDefaults(unittest.TestCase):
+    """A release folder: with no --engine and no --fixtures, the tools resolve against the tree
+    they are installed in, not the folder they run from or the build machine's paths."""
+
+    def test_bench_prints_the_installed_engine_and_reads_the_installed_fixtures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "basalt-release"
+            (root / "bin").mkdir(parents=True)
+            installed_engine = shutil.copy2(ENGINE, root / "bin" / ENGINE.name)
+            installed_bench = shutil.copy2(BENCH, root / "bin" / BENCH.name)
+            (root / "serve").mkdir()
+            (root / "serve" / "server.py").write_text("# the tree marker tree_root looks for\n")
+            fixtures = root / "data" / "bench"
+            fixtures.mkdir(parents=True)
+            for n in ("conv", "struct", "prose"):
+                (fixtures / f"{n}.ids").write_text("1,2,3\n")
+            (fixtures / "prefill.ids").write_text("1,2\n3,4,5\n6\n")
+            elsewhere = Path(tmp) / "elsewhere"
+            elsewhere.mkdir()
+            # --print-command exits after the fixtures load: finding them is part of what this proves
+            r = subprocess.run([str(installed_bench), "--model", "m.basalt", "--print-command"],
+                               capture_output=True, text=True, cwd=elsewhere)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            printed_engine = Path(r.stdout.split()[0])
+            self.assertTrue(os.path.samefile(printed_engine, installed_engine),
+                            f"{printed_engine} is not the engine beside the bench")
 
 
 if __name__ == "__main__":

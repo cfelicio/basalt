@@ -106,8 +106,8 @@ preset (`--community`, `--submitter`, `--community-file`).
 | `--seed` | integer >= 1 | Seed every decode request, so the sampled fixtures give the same text each run. |
 | `--model`, `--gpu`, `--spec` | as for the engine | Passed to the engine; `--spec 0` is a plain-decode baseline. |
 | `--set` | `"FLAG VALUE ..."` | Replace or add engine arguments; repeatable. Arguments after `--` do the same. |
-| `--engine` | path | The engine binary; default the one built with the bench. |
-| `--fixtures` | directory, `data/bench` | Where the pre-tokenized prompts are. |
+| `--engine` | path | The engine binary; default the `basalt` installed beside the bench. |
+| `--fixtures` | directory, `data/bench` | Where the pre-tokenized prompts are; default the `data/bench` of the installation the bench runs from. |
 | `-o` | `md`, `json`; `md` | A markdown table, or the full detail as JSON on stdout. |
 | `--power-label` | watts | The power limit to print instead of the one read from the GPU. |
 | `--logs` | directory | Keep the engine log, the draft log and the quality rows there. |

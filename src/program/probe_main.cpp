@@ -21,6 +21,7 @@
 #include "basalt/program/options.hpp"
 #include "basalt/program/probe_derive.hpp"
 #include "basalt/program/probe_report.hpp"
+#include "basalt/program/tool_paths.hpp"
 #include "basalt/log.hpp"
 
 #ifndef BASALT_BENCH_ENGINE
@@ -53,8 +54,8 @@ void usage() {
         "usage: basalt-probe --model FILE.basalt [-- ENGINE ARGS...]\n"
         "\n"
         "  --model FILE          a .basalt model file\n"
-        "  --engine BIN          engine binary (default: the one built with this program)\n"
-        "  --fixtures DIR        fixture ids (default %s)\n"
+        "  --engine BIN          engine binary (default: the basalt installed beside this program)\n"
+        "  --fixtures DIR        fixture ids (default: this installation's data/bench)\n"
         "  --logs DIR            keep the engine log there\n"
         "  --gpu A,B,..|auto     the GPUs, as for the server and the engine (default: GPU 0 alone)\n"
         "  -- ARGS...            engine flags, as for basalt-bench (--kv, --spec, ...)\n"
@@ -62,11 +63,11 @@ void usage() {
         "It runs conv, struct and prose once each (cold: the first request after load counts), %lld tokens each,\n"
         "greedy, then the adaptive tier's settings, each from the start placement. Nothing is saved; a\n"
         "--expert-profile-save file is compared, not written.\n",
-        BASALT_BENCH_FIXTURES, kTokens);
+        kTokens);
 }
 
 struct ProbeOptions {
-    std::string model, engine, fixtures = BASALT_BENCH_FIXTURES, logs;
+    std::string model, engine, fixtures, logs;
     std::vector<std::string> passthrough;
 };
 
@@ -210,11 +211,12 @@ int main(int argc, char** argv) {
     basalt::platform::ignore_broken_pipe();
     basalt::platform::install_child_stop_signals();
 
-    std::string engine_bin = o.engine.empty() ? std::string(BASALT_BENCH_ENGINE) : o.engine;
+    std::string engine_bin = o.engine.empty() ? default_engine_bin(BASALT_BENCH_ENGINE) : o.engine;
     if (engine_bin.empty() || !fs::exists(engine_bin)) {
         basalt::log::error("basalt-probe", "the engine binary %s does not exist (--engine BIN)", engine_bin.c_str());
         return 2;
     }
+    if (o.fixtures.empty()) o.fixtures = default_fixtures_dir(BASALT_BENCH_FIXTURES);
 
     std::vector<std::string> args = {"--model", fs::absolute(o.model).string()};
     merge_args(args, o.passthrough);

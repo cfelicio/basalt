@@ -36,8 +36,9 @@ The engine tokenizes request text itself (`GENT`). `tokenizer_test` checks the C
 `-DBASALT_TOKENIZER_DIR=<a pack's extracted tokenizer/ directory>` (with python3 and the `regex` package; `-DBASALT_TOKENIZER_BIG`
 adds `--big FILE...` to the corpus). `tokenizer_bench DIR FILE...` times a cold and a warm encode.
 
-`basalt-bench` reads its pre-tokenized prompts from `data/bench` (token ids for the Qwen3.8-Flash-Next tokenizer: the
-three decode prompts and a prefill filler); run it from the repository root or pass `--fixtures DIR`. `basalt-bench
+`basalt-bench` and `basalt-probe` find the engine in the `bin` they are installed in and their pre-tokenized prompts
+in that tree's `data/bench` (token ids for the Qwen3.8-Flash-Next tokenizer: the three decode prompts and a prefill
+filler; a release folder ships them); `--engine BIN` and `--fixtures DIR` pick other ones. `basalt-bench
 --help` says how the files are made.
 
 The build needs nothing outside this repository and fetches nothing. The parts of ggml and llama.cpp that Basalt uses
