@@ -13,6 +13,7 @@ __pycache__/
 /packs/
 /mtp/
 /.ccache/
+/dist/
 .DS_Store
 
 # Local working notes for the Windows port: scratch planning, not project docs.
