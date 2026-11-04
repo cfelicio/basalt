@@ -103,6 +103,13 @@ class Release(unittest.TestCase):
             self.assertTrue((root / "serve" / "server.py").is_file())
             self.assertFalse((root / "VERSION").exists(), "the release notes are not copied over the tree")
 
+    def test_a_source_checkout_is_never_unpacked_over(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "checkout"
+            (root / ".git").mkdir(parents=True)
+            (root / "serve").mkdir()
+            self.assertIsNone(b.fetch_release(root), "a checkout keeps its own serve/, tools/ and data/")
+
     def test_downloading_a_file_checks_its_sha(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)

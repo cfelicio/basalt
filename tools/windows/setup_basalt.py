@@ -268,6 +268,12 @@ def sha_ok(path: Path, want: str) -> bool:
 
 def fetch_release(root: Path) -> Path | None:
     """The newest release's Windows zip, checked against the release's SHA-256, unpacked into `root`."""
+    if (root / ".git").exists():
+        # unpacking replaces serve/, tools/, data/ and the docs: in a checkout that dirties the working tree
+        say("engine", "this is a source checkout, so the prebuilt engine is not unpacked over it")
+        fix("build it (START-HERE.bat --build), or unpack the zip from " + FEED.rsplit("/download", 1)[0] +
+            " into an empty folder and run START-HERE.bat there")
+        return None
     try:
         sums = fetch(f"{FEED}/SHA256SUMS.txt").decode("utf-8", "replace")
     except (OSError, urllib.error.URLError) as e:
@@ -521,8 +527,12 @@ def main() -> int:
         if args.no_download:
             say("engine", "not downloading the release (--no-download)")
         elif plan:
-            say("engine", f"would fetch {FEED}/basalt-<version>-windows-x64-cuda13.zip, check its SHA-256 "
-                          f"and unpack it into {ROOT}")
+            if (ROOT / ".git").exists():
+                say("engine", "this is a source checkout: the prebuilt engine is not unpacked over it; "
+                              "--build builds it, or unpack the zip into an empty folder and run START-HERE.bat there")
+            else:
+                say("engine", f"would fetch {FEED}/basalt-<version>-windows-x64-cuda13.zip, check its SHA-256 "
+                              f"and unpack it into {ROOT}")
         elif args.yes or (interactive and ask("download the prebuilt engine for this card? [Y/n]: ", "y")
                           .lower() in ("y", "yes")):
             if fetch_release(ROOT) or find_engine(ROOT, args.engine_bin):
@@ -565,7 +575,8 @@ def main() -> int:
         write_config(ROOT, cfg)
 
     # 6. serve
-    cmd = [str(engine), "serve", "--config", str(ROOT / "basalt_config.json")]
+    engine_shown = engine or ROOT / "bin" / ENGINE_EXE
+    cmd = [str(engine_shown), "serve", "--config", str(ROOT / "basalt_config.json")]
     print()
     if model:
         print("  The engine places the experts in VRAM, in the peer card and in RAM at start, and prints what it did.")
