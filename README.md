@@ -41,6 +41,15 @@ bin/basalt serve --config basalt_config.json
 
 The server listens on 127.0.0.1 by default.
 
+## Windows
+
+Double-click `START-HERE.bat` in the unpacked folder of a [release](https://github.com/cfelicio/basalt/releases):
+it checks the card, sets up Python, helps choose a model, writes `basalt_config.json` and serves. It asks before
+it downloads anything, and `START-HERE.bat --plan` prints every step and changes nothing. The zip carries the
+CUDA and MSVC runtime libraries, so a current NVIDIA driver for a Blackwell card is all the machine needs.
+[Windows releases](docs/windows-release.md) has the build; [platforms](docs/platforms.md) has the requirements
+and the Windows limitations. The steps below build the same engine from source on any platform.
+
 ## Models
 
 <p align="center"><img src="docs/assets/basalt-format.png" alt="Inside a .basalt file" width="800"></p>
