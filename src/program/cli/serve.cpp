@@ -46,7 +46,8 @@ int serve_subcommand(int argc, char** argv) {
     }
     const std::string exe = basalt::platform::module_path();
     if (exe.empty()) { basalt::log::error("basalt serve", "cannot find this binary"); return 1; }
-    const std::string src_dir = BASALT_SOURCE_DIR;
+    // The tree this binary serves from: the folders installed beside it, else the tree it was built in.
+    const std::string src_dir = basalt::platform::tree_root(exe, BASALT_SOURCE_DIR);
     if (python.empty()) python = basalt::platform::python_interpreter(src_dir);
     if (basalt::platform::set_working_dir(src_dir) != 0) {
         basalt::log::error("basalt serve", "cannot enter the source tree %s", src_dir.c_str());

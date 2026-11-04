@@ -70,6 +70,19 @@ std::optional<std::string> capture_output(const std::vector<std::string>& argv, 
     return out;
 }
 
+std::string tree_root(const std::string& exe_path, const std::string& built_dir) {
+    // Walking up from the binary's folder is path work only; the marker file is read through the file seam.
+    std::filesystem::path dir = std::filesystem::path(exe_path).parent_path();
+    for (int up = 0; up < 3; ++up) {
+        uint64_t bytes = 0;
+        if (!dir.empty() && file_size((dir / "serve" / "server.py").string(), bytes) && bytes > 0) return dir.string();
+        const std::filesystem::path parent = dir.parent_path();
+        if (parent == dir) break;   // the filesystem root: walking up further answers nothing
+        dir = parent;
+    }
+    return built_dir;
+}
+
 #if defined(_WIN32)
 // --------------------------------------------------------------------------------------------- Windows
 

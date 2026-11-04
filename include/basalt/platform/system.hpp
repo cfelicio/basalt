@@ -23,6 +23,12 @@ std::string host_os_name();
 /// the platform puts on PATH.
 std::string python_interpreter(const std::string& src_dir);
 
+/// The tree the engine reads `serve/` and `data/` from. An installed engine carries those folders beside its
+/// binaries, so the tree is the folder holding `serve/server.py` found by walking up from the folder of `exe_path`
+/// (the bin folder, its parent, and one level above). With no such tree beside the binaries it is `built_dir`, the
+/// tree the binaries were compiled in, which is where a build in a source tree finds them.
+std::string tree_root(const std::string& exe_path, const std::string& built_dir);
+
 /// Asks that this process be the one ended first if the machine runs out of memory. No effect where the OS has no
 /// such knob.
 void prefer_oom_victim();

@@ -1060,8 +1060,9 @@ if(NOT WIN32)
 endif()
 
 # the platform seams below the engine: thread placement and topology, the compiler helpers, large host regions, the
-# piped child, the system questions, the dynamic loader and the file writes and directory calls (CPU only, both platforms).
-foreach(_t cpu_test compiler_test region_test process_pipe_test system_test file_write_test)
+# piped child, the system questions, the dynamic loader, the file writes and directory calls and the installed tree
+# lookup (CPU only, both platforms).
+foreach(_t cpu_test compiler_test region_test process_pipe_test system_test file_write_test tree_root_test)
   add_executable(platform_${_t} tests/platform/${_t}.cpp)
   target_link_libraries(platform_${_t} PRIVATE platform Threads::Threads)
   target_include_directories(platform_${_t} PRIVATE include)
