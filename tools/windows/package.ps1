@@ -19,7 +19,11 @@
 
     Usage:
         pwsh -File tools/windows/package.ps1 -SourceDir . -OutDir dist -Version 0.2.1-win1
+        pwsh -File tools/windows/package.ps1 -SourceDir . -OutDir dist -Version test -CudaRedistDir cuda-redist
         pwsh -File tools/windows/package.ps1 -SourceDir . -OutDir dist -Version test -BuildDir build -NoZip
+
+    -CudaRedistDir points at the folder tools/windows/fetch_cuda_redist.ps1 fills from NVIDIA's redist index;
+    it is searched before the installed toolkit, and VERSION records the package versions and hashes.
 #>
 [CmdletBinding()]
 param(
@@ -28,6 +32,7 @@ param(
     [string] $OutDir = 'dist',
     [string] $Version = 'dev',
     [string] $Architecture = 'cuda13',
+    [string] $CudaRedistDir = '',
     [switch] $NoZip
 )
 
@@ -70,27 +75,34 @@ if (-not $binFrom) {
 $exes = Get-ChildItem -LiteralPath $binFrom -Filter '*.exe' -File
 $exes | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $root 'bin') -Force }
 
-# ---- the CUDA runtime: cudart and cuBLAS, the libraries the engine links. The toolkit keeps these
-# DLLs under bin, and its dev components put some of them under bin\x64 or x64.
-$cudaRoot = $env:CUDA_PATH
-if (-not $cudaRoot -or -not (Test-Path -LiteralPath $cudaRoot)) {
-    $cudaRoot = Get-ChildItem 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA' -Directory -ErrorAction SilentlyContinue |
+# ---- the CUDA runtime: the engine links cudart and cuBLAS (prefill links cublas, which loads cublasLt at
+# run time). A toolkit install on a build machine is often dev-only: import libraries and headers, no DLLs.
+# So the redist folder tools/windows/fetch_cuda_redist.ps1 fills from NVIDIA's index is searched first, and
+# the installed toolkit after it.
+$cudaDirs = @()
+if ($CudaRedistDir) {
+    if (-not (Test-Path -LiteralPath $CudaRedistDir)) { throw "no CUDA redist folder at $CudaRedistDir" }
+    $cudaDirs += @((Join-Path $CudaRedistDir 'bin'), (Join-Path $CudaRedistDir 'bin\x64'), $CudaRedistDir)
+}
+$cudaToolkit = $env:CUDA_PATH
+if (-not $cudaToolkit -or -not (Test-Path -LiteralPath $cudaToolkit)) {
+    $cudaToolkit = Get-ChildItem 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA' -Directory -ErrorAction SilentlyContinue |
         Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
 }
-if (-not $cudaRoot -or -not (Test-Path -LiteralPath $cudaRoot)) { throw 'no CUDA toolkit found for the runtime DLLs' }
-$cudaDirs = @('bin', 'bin\x64', 'x64') | ForEach-Object { Join-Path $cudaRoot $_ } |
-    Where-Object { Test-Path -LiteralPath $_ }
-$cudaDlls = @('cudart64_*.dll', 'cublas64_*.dll', 'cublasLt64_*.dll') | ForEach-Object {
-    $pattern = $_
-    $cudaDirs | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter $pattern -File -ErrorAction SilentlyContinue }
-} | Sort-Object Name -Unique
-foreach ($need in 'cudart64_*.dll', 'cublas64_*.dll') {
-    if (-not ($cudaDlls | Where-Object { $_.Name -like $need })) {
+if ($cudaToolkit) { $cudaDirs += @((Join-Path $cudaToolkit 'bin'), (Join-Path $cudaToolkit 'bin\x64'), (Join-Path $cudaToolkit 'x64')) }
+$cudaDirs = @($cudaDirs | Where-Object { Test-Path -LiteralPath $_ })
+if (-not $cudaDirs) { throw 'no CUDA runtime to ship: pass -CudaRedistDir, install the toolkit (CUDA_PATH)' }
+$cudaDlls = @()
+foreach ($pattern in 'cudart64_*.dll', 'cublas64_*.dll', 'cublasLt64_*.dll') {
+    $hit = $cudaDirs | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter $pattern -File -ErrorAction SilentlyContinue } |
+        Sort-Object Length -Descending | Select-Object -First 1
+    if (-not $hit) {
         $seen = ($cudaDirs | ForEach-Object {
             (Get-ChildItem -LiteralPath $_ -Filter '*.dll' -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ' '
         }) -join '; '
-        throw "no $need under the CUDA toolkit. searched: $($cudaDirs -join ', '). dlls there: $seen"
+        throw "no $pattern. searched: $($cudaDirs -join ', '). dlls there: $seen"
     }
+    $cudaDlls += $hit
 }
 $cudaDlls | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $root 'bin') -Force }
 
@@ -132,14 +144,22 @@ if ($nvcc) {
     $line = (nvcc --version 2>$null | Select-String 'release' | Select-Object -First 1)
     if ($line) { $cudaVer = ($line.ToString() -split 'release')[-1].Trim() }
 }
-@"
-version:    $Version
-commit:     $commit
-platform:   windows-x64
-architecture: sm_$suffix
-cuda:       $cudaVer
-built:      $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC
-"@ | Set-Content -LiteralPath (Join-Path $root 'VERSION') -Encoding ascii
+$lines = @(
+    "version:    $Version",
+    "commit:     $commit",
+    "platform:   windows-x64",
+    "architecture: sm_$suffix",
+    "cuda:       $cudaVer",
+    "built:      $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
+)
+if ($CudaRedistDir) {
+    # which runtime the zip carries, with the hash NVIDIA's index published for it
+    $redistFile = Join-Path $CudaRedistDir 'REDIST.txt'
+    if (Test-Path -LiteralPath $redistFile) {
+        $lines += (Get-Content -LiteralPath $redistFile -Encoding ascii | ForEach-Object { "runtime:    $_" })
+    }
+}
+$lines | Set-Content -LiteralPath (Join-Path $root 'VERSION') -Encoding ascii
 
 @'
 {

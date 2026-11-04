@@ -14,6 +14,7 @@ __pycache__/
 /mtp/
 /.ccache/
 /dist/
+/cuda-redist/
 .DS_Store
 
 # Local working notes for the Windows port: scratch planning, not project docs.

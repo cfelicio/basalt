@@ -91,21 +91,21 @@ jobs:
       - name: Build
         run: cmake --build build -j "$(nproc)" -- -k 0
 
-      - name: The binaries answer
+      - name: The shipped programs are linked
         run: |
           # the shipped programs are linked into <source>/bin (RUNTIME_OUTPUT_DIRECTORY in CMakeLists)
-          ./bin/basalt.exe --help > help.txt
-          head -3 help.txt
-          ls -l bin/*.exe
-          test -s bin/basalt.exe
-          test -s bin/basalt-vision.exe
+          for p in basalt basalt-bench basalt-probe basalt-vision; do test -s "bin/$p.exe" && echo "built bin/$p.exe"; done
 
       - name: AVX-512 stays inside the dispatched kernels
         run: python tools/check_isa_isolation.py build
 
+      - name: CUDA runtime DLLs from NVIDIA's redist
+        shell: pwsh
+        run: ./tools/windows/fetch_cuda_redist.ps1 -Version '${{ env.CUDA_VERSION }}' -OutDir cuda-redist
+
       - name: Package
         shell: pwsh
-        run: ./tools/windows/package.ps1 -SourceDir . -BuildDir build -OutDir dist -Version '${{ steps.v.outputs.version }}'
+        run: ./tools/windows/package.ps1 -SourceDir . -BuildDir build -OutDir dist -CudaRedistDir cuda-redist -Version '${{ steps.v.outputs.version }}'
 
       - name: The zip is complete
         shell: pwsh
@@ -114,7 +114,8 @@ jobs:
           if (-not ('System.IO.Compression.ZipFile' -as [type])) { Add-Type -AssemblyName System.IO.Compression.FileSystem }
           $z = [System.IO.Compression.ZipFile]::OpenRead($zip.FullName)
           $names = $z.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
-          foreach ($need in 'bin/basalt.exe', 'bin/cudart64_13.dll', 'bin/cublas64_13.dll', 'serve/server.py',
+          foreach ($need in 'bin/basalt.exe', 'bin/cudart64_13.dll', 'bin/cublas64_13.dll', 'bin/cublasLt64_13.dll',
+                           'serve/server.py',
                            'data/profiles', 'tools/windows/setup_basalt.py', 'START-HERE.bat', 'requirements.txt',
                            'VERSION', 'README-WINDOWS.md') {
             if (-not ($names | Where-Object { $_ -like "*/$need" -or $_ -like "*/$need/*" })) {
@@ -124,6 +125,19 @@ jobs:
           $z.Dispose()
           "zip: $([math]::Round($zip.Length / 1MB, 1)) MiB, $($names.Count) files"
           Get-Content "$($zip.FullName).SHA256SUMS"
+
+      - name: The packaged engine answers, with no CUDA on PATH
+        shell: pwsh
+        run: |
+          # unpack the zip as a user would, then run the engine with the toolkit off PATH: the libraries beside
+          # the binary are all it may have
+          $zip = Get-ChildItem dist/basalt-*.zip | Select-Object -First 1
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath dist/smoke -Force
+          $root = (Get-ChildItem dist/smoke -Directory | Select-Object -First 1).FullName
+          Get-ChildItem (Join-Path $root 'bin') | ForEach-Object { "  bin\{0}  {1:N1} MiB" -f $_.Name, ($_.Length / 1MB) }
+          $env:PATH = 'C:\Windows\System32;C:\Windows'
+          & (Join-Path $root 'bin\basalt.exe') --help | Select-Object -First 3
+          if ($LASTEXITCODE -ne 0) { throw "the packaged engine exited $LASTEXITCODE with CUDA off PATH" }
 
       - name: Artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
