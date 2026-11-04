@@ -1,0 +1,241 @@
+name: upstream-windows
+
+# When upstream (jesdga95/basalt) publishes a release, build the Windows binaries for that release and publish
+# them as this fork's release, named after upstream's version: v0.2.2 upstream -> v0.2.2-win1 here. Nothing is
+# merged into the fork's main branch: upstream's tag is merged into the working tree of the run, so the built
+# tree is main plus that release and VERSION records both. A clean merge builds and publishes; a conflict opens
+# one issue naming the files and publishes nothing. Runs on the job's own token: no secrets.
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "upstream tag to build (default: upstream's latest release)"
+        required: false
+      publish:
+        description: "publish the release; uncheck to build the zip as an artifact only"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  UPSTREAM_REPO: jesdga95/basalt
+  CUDA_VERSION: "13.0.2"
+  ARCH: "120"
+
+concurrency:
+  group: upstream-windows
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      upstream_tag: ${{ steps.pick.outputs.upstream_tag }}
+      upstream_sha: ${{ steps.pick.outputs.upstream_sha }}
+      win_tag: ${{ steps.pick.outputs.win_tag }}
+      should_build: ${{ steps.pick.outputs.should_build }}
+    steps:
+      - name: Pick the upstream release to build
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANT_TAG: ${{ github.event.inputs.upstream_tag }}
+        run: |
+          owner="${UPSTREAM_REPO%%/*}"; name="${UPSTREAM_REPO##*/}"
+          if [ -n "$WANT_TAG" ]; then
+            tag="$WANT_TAG"
+          else
+            tag="$(gh api "repos/$UPSTREAM_REPO/releases/latest" --jq .tag_name 2>/dev/null \
+                   || gh api "repos/$UPSTREAM_REPO/tags?per_page=1" --jq '.[0].name')"
+          fi
+          url="https://github.com/$UPSTREAM_REPO/releases/tag/$tag"
+          # the commit the tag points at, peeling an annotated tag
+          obj="$(gh api "repos/$UPSTREAM_REPO/git/ref/tags/$tag" --jq '.object.type + " " + .object.sha')"
+          sha="${obj##* }"
+          [ "${obj%% *}" = tag ] && sha="$(gh api "repos/$UPSTREAM_REPO/git/tags/$sha" --jq .object.sha)"
+          win_tag="${tag#v}-win1"
+          if [ -n "$WANT_TAG" ]; then
+            should=1
+          elif gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$win_tag" >/dev/null 2>&1; then
+            should=0
+          else
+            should=1
+          fi
+          {
+            echo "upstream_tag=$tag"; echo "upstream_sha=$sha"; echo "win_tag=$win_tag"; echo "should_build=$should"
+          } >> "$GITHUB_OUTPUT"
+          echo "upstream $tag at ${sha:0:8}; should_build=$should"
+          [ "$should" = 0 ] && echo "release v$win_tag already exists here: nothing to do"
+
+  windows:
+    needs: resolve
+    if: needs.resolve.outputs.should_build == '1'
+    runs-on: windows-2022
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Merge the upstream tag into the working tree
+        env:
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git -c user.name=basalt-release-bot -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+              fetch --no-tags "https://github.com/$UPSTREAM_REPO" "refs/tags/$UPSTREAM_TAG:refs/tags/upstream"
+          if ! git -c user.name=basalt-release-bot \
+                 -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+                 merge --no-ff -q -m "windows release build: merge $UPSTREAM_TAG" refs/tags/upstream; then
+            git diff --name-only --diff-filter=U > conflicts.txt
+            {
+              echo "Merging upstream \`$UPSTREAM_TAG\` into \`$GITHUB_REF_NAME\` for the Windows release build conflicts:"
+              echo; sed 's/^/- /' conflicts.txt; echo
+              echo "No release was published. Fix the merge on \`main\` (the files above) and the next scheduled run, or a manual run with \`upstream_tag=$UPSTREAM_TAG\`, builds it."
+              echo; echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            } > issue.md
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "windows release: upstream $UPSTREAM_TAG does not merge cleanly" --body-file issue.md
+            exit 1
+          fi
+          git log --oneline -1
+
+      - name: CUDA toolkit
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
+        with:
+          cuda: ${{ env.CUDA_VERSION }}
+          method: network
+          sub-packages: '["nvcc", "cudart", "crt", "nvvm", "cublas_dev", "nvrtc_dev", "visual_studio_integration"]'
+          use-github-cache: true
+
+      - name: MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+
+      - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        with:
+          key: release-windows-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: release-windows-
+          max-size: 1G
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -DCMAKE_CUDA_ARCHITECTURES=${ARCH}
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
+          -DPython3_EXECUTABLE="$(python -c 'import sys;print(sys.executable.replace(chr(92),"/"))')"
+
+      - name: Build
+        run: cmake --build build -j "$(nproc)" -- -k 0
+
+      - name: The shipped programs are linked
+        run: for p in basalt basalt-bench basalt-probe basalt-vision; do test -s "bin/$p.exe" && echo "built bin/$p.exe"; done
+
+      - name: AVX-512 stays inside the dispatched kernels
+        run: python tools/check_isa_isolation.py build
+
+      - name: CUDA runtime DLLs from NVIDIA's redist
+        shell: pwsh
+        run: ./tools/windows/fetch_cuda_redist.ps1 -Version '${{ env.CUDA_VERSION }}' -OutDir cuda-redist
+
+      - name: Package
+        shell: pwsh
+        run: ./tools/windows/package.ps1 -SourceDir . -BuildDir build -OutDir dist -CudaRedistDir cuda-redist -Version '${{ needs.resolve.outputs.win_tag }}'
+
+      - name: Record what the zip was built from
+        shell: pwsh
+        run: |
+          # the tree is this fork's commit merged with upstream's tag, so the zip says both; the commit in
+          # VERSION is the merge commit this run made, and the release notes link the run that made it
+          $stage = (Get-ChildItem dist/stage-tmp -Directory -Filter 'basalt-*' -ErrorAction SilentlyContinue |
+                    Select-Object -First 1).FullName
+          if (-not $stage) { throw 'no staged tree to record: packaging did not run' }
+          @(
+            "upstream:   ${{ needs.resolve.outputs.upstream_tag }} (commit ${{ needs.resolve.outputs.upstream_sha }})",
+            "fork:       $env:GITHUB_SHA"
+          ) | Add-Content -LiteralPath (Join-Path $stage 'VERSION') -Encoding ascii
+          Get-Content (Join-Path $stage 'VERSION') | Select-Object -Last 3
+
+      - name: The zip is complete
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist/basalt-*.zip
+          if (-not ('System.IO.Compression.ZipFile' -as [type])) { Add-Type -AssemblyName System.IO.Compression.FileSystem }
+          $z = [System.IO.Compression.ZipFile]::OpenRead($zip.FullName)
+          $names = $z.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
+          foreach ($need in 'bin/basalt.exe', 'bin/cudart64_13.dll', 'bin/cublas64_13.dll', 'bin/cublasLt64_13.dll',
+                           'serve/server.py', 'data/profiles', 'tools/windows/setup_basalt.py', 'START-HERE.bat',
+                           'requirements.txt', 'VERSION', 'README-WINDOWS.md') {
+            if (-not ($names | Where-Object { $_ -like "*/$need" -or $_ -like "*/$need/*" })) {
+              Write-Error "the zip has no $need"; $z.Dispose(); exit 1
+            }
+          }
+          $z.Dispose()
+          "zip: $([math]::Round($zip.Length / 1MB, 1)) MiB, $($names.Count) files"
+          Get-Content "$($zip.FullName).SHA256SUMS"
+
+      - name: The packaged engine answers, with no CUDA on PATH
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist/basalt-*.zip | Select-Object -First 1
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath dist/smoke -Force
+          $root = (Get-ChildItem dist/smoke -Directory | Select-Object -First 1).FullName
+          $env:PATH = 'C:\Windows\System32;C:\Windows'
+          & (Join-Path $root 'bin\basalt.exe') --help | Select-Object -First 3
+          if ($LASTEXITCODE -ne 0) { throw "the packaged engine exited $LASTEXITCODE with CUDA off PATH" }
+
+      - name: Publish the release for upstream's version
+        if: github.event_name == 'schedule' || github.event.inputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WIN_TAG: ${{ needs.resolve.outputs.win_tag }}
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+          UPSTREAM_SHA: ${{ needs.resolve.outputs.upstream_sha }}
+        run: |
+          zip="$(ls dist/basalt-*.zip | head -1)"
+          {
+            echo "Windows x64 binaries for compute capability 12.0 (RTX 50 series, RTX PRO Blackwell), built by"
+            echo "[upstream-windows.yml]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) from"
+            echo "[\`$GITHUB_SHA\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA) merged with"
+            echo "upstream [$UPSTREAM_REPO@$UPSTREAM_TAG](https://github.com/$UPSTREAM_REPO/releases/tag/$UPSTREAM_TAG)"
+            echo "(commit \`${UPSTREAM_SHA:0:8}\`): these binaries are upstream's \`$UPSTREAM_TAG\` plus this fork's Windows work."
+            echo
+            echo "SHA-256 is in \`$zip.SHA256SUMS\`. Unpack anywhere and run \`START-HERE.bat\`; a current NVIDIA driver"
+            echo "is the only thing to install."
+            echo
+            echo "Checked by CI: MSVC compile, Windows CPU tests, AVX-512 isolation, the zip's contents, and the packaged"
+            echo "engine starting with no CUDA toolkit installed. Not checked by CI: there is no GPU runner, so loading a"
+            echo "real model, speed and PPL/KLD quality are unmeasured here."
+          } > notes.md
+          gh release create "v$WIN_TAG" --target "$GITHUB_SHA" --title "Basalt v$WIN_TAG (Windows x64, CUDA 13, sm_120)" \
+            --notes-file notes.md "$zip" "$zip.SHA256SUMS" \
+            || gh release upload "v$WIN_TAG" --clobber "$zip" "$zip.SHA256SUMS"
+          echo "released v$WIN_TAG: $(gh release view "v$WIN_TAG" --repo "$GITHUB_REPOSITORY" --json htmlUrl -q .htmlUrl)"
+
+      - name: Artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e03d3393ed85154cb36d5c199a453500d6f # v6.0.0
+        with:
+          name: basalt-windows-${{ needs.resolve.outputs.win_tag }}
+          path: |
+            dist/basalt-*.zip
+            dist/basalt-*.zip.SHA256SUMS
+          if-no-files-found: ignore

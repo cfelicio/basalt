@@ -4,6 +4,25 @@ This fork adds a prebuilt Windows engine to Basalt. The engine itself, its Windo
 upstream's: see [platforms](platforms.md). What is added here is the packaging, the release build and one entry
 point a person can double-click.
 
+## Tracking upstream
+
+The author releases often, so a scheduled workflow does the work: `upstream-windows.yml` runs every six hours,
+asks upstream for its latest release and publishes Windows binaries for it under the same number with a `-win1`
+suffix - upstream's `v0.2.2` becomes this fork's `v0.2.2-win1`. When that release already exists here the run
+does nothing.
+
+Nothing is merged into the fork's `main`. The run merges the upstream tag into its own working tree and builds
+that, and the zip's `VERSION` records the upstream tag, the upstream commit and this fork's commit; the release
+notes link the run, so the merge commit named in `VERSION` is reachable from them.
+
+A merge conflict stops the machine: the run opens one issue listing the conflicting files and publishes nothing.
+Fixing that merge on `main` is a person's job, and the next scheduled run - or a manual one with
+`upstream_tag=<tag>` - builds it.
+
+Publishing uses the workflow's own token: the release is authored by `github-actions[bot]` and the repository
+holds no secrets. A manual run with `publish` unchecked builds the zip as a workflow artifact and publishes
+nothing, which is how a change to this pipeline is tested without shipping a release.
+
 ## What a user does
 
 Double-click **START-HERE.bat** in the unpacked release folder. It checks the card, sets up Python in `.venv`,
