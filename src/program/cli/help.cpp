@@ -1,6 +1,7 @@
 #include "help.hpp"
 
 #include "basalt/log.hpp"
+#include "basalt/program/options.hpp"
 
 namespace basalt::program::cli {
 
@@ -48,7 +49,7 @@ void usage() {
                  "  --prompt-cache-root N  --serve: checkpoint a prompt's first turn boundary when it is at least N tokens\n"
                  "                       long (default 2048, 0 = never)\n"
                  "  --max-new N          tokens to generate (default 16)\n"
-                 "  --max-context N      KV/state capacity (default 4096)\n"
+                 "  --max-context N      KV/state capacity (default %lld)\n"
                  "  --rope-scaling T     extend the context past the trained one: none, linear\n"
                  "                       (position interpolation) or yarn - llama.cpp's types and names.\n"
                  "                       Default: the model file's rope keys, else none. Fixed at startup:\n"
@@ -77,6 +78,8 @@ void usage() {
                  "  --conversation-cache-mib N  --serve: RAM budget for parked conversations (default 0 = off)\n"
                  "  --conversation-cache-slots N  --serve: at most N parked conversations (default 4)\n"
                  "  --conversation-cache-min-free-mib N  --serve: physical RAM floor when parking (default 2560)\n"
+                 "  --ram-reserve-mib N  RAM left free for the rest of the system (default 2048); the expert tiers leave\n"
+                 "                       it and the --serve RAM guard holds it (0 = keep nothing, guard off)\n"
                  "  --conversation-cache-min-tokens N  --serve: park only conversations of at least N tokens (default 0 = park every one)\n"
                  "  --conversation-cache-disk-mib N  --serve: park conversations on disk, at most N MiB, and read them back\n"
                  "                       when a prompt starts with one, also after a restart (default 0 = off)\n"
@@ -104,19 +107,20 @@ void usage() {
                  "                       (32, 64, 96 or 128; default 32; 0 = all)\n"
                  "  --relaxed-drafting [P]  sampled requests keep a draft the target gives probability >= P even when\n"
                  "                       the target's own draw differs: faster, but NOT the exact sampling distribution\n"
-                 "                       (docs/precision/features.md).  P in (0, 1]; lower is faster and further from exact;\n"
-                 "                       the flag alone = 0.5.  Tool calls, control tokens, logit_bias and greedy\n"
-                 "                       requests stay exact.  Default off (exact)\n"
+                 "                       (docs/precision/qwen38-flash-next.md#relaxed-drafting).\n"
+                 "                       P in (0, 1]; lower is faster and further from exact; the flag alone = 0.5.  Tool calls,\n"
+                 "                       control tokens, logit_bias and greedy requests stay exact.  Default off (exact)\n"
                  "  --route-tail-skip [R]  a decode window drops a routed expert no GPU holds when every entry naming it\n"
                  "                       ranks R or lower by router weight (0-based of 10): neither copied nor computed,\n"
                  "                       the others keep their weights.  Faster, but LESS ACCURATE than the model\n"
-                 "                       (docs/precision/routing.md).  R in 1..9, lower drops more; the flag alone = 9.\n"
-                 "                       Needs the device-planned MoE tail.  Default off (exact)\n"
+                 "                       (docs/precision/qwen38-flash-next.md#lossy-routing-flags).\n"
+                 "                       R in 1..9, lower drops more; the flag alone = 9.  Needs the device-planned MoE tail.\n"
+                 "                       Default off (exact)\n"
                  "  --route-prior [LAMBDA]  a decode window picks its ten experts as if each one a GPU holds had LAMBDA\n"
                  "                       added to its router logit; the weights stay the router's.  Faster, but LESS\n"
-                 "                       ACCURATE than the model (docs/precision/routing.md).  LAMBDA in (0, 16], higher\n"
-                 "                       routes harder toward held experts; the flag alone = 0.5.  Needs the device-planned\n"
-                 "                       MoE tail.  Default off (exact)\n"
+                 "                       ACCURATE than the model (docs/precision/qwen38-flash-next.md#lossy-routing-flags).\n"
+                 "                       LAMBDA in (0, 16], higher routes harder toward held experts; the flag alone = 0.5.\n"
+                 "                       Needs the device-planned MoE tail.  Default off (exact)\n"
                  "  --grammar on|off     --serve: enforce a request's \"grammar\" (tool-call, JSON-schema or JSON-object\n"
                  "                       grammar) on the sampled tokens; the vocabulary comes from the pack.  Default off\n"
                  "  --mtp-max-t M        cap the MTP's windows at M tokens (0 = --spec; longer ones come from suffixes)\n"
@@ -202,13 +206,11 @@ void usage() {
                  "  --resident-experts   (the default with an expert profile) the low-RAM resident mode: --mmap-experts --resident-cpu-experts\n"
                  "                       with the copy page-locked when possible, the RAM floor left free (see\n"
                  "                       docs/running.md, Memory floors), plain mmap if it does not fit.  Same answers as --mmap-experts for the same placement.\n"
-                 "                       When some experts stay in the file, the copy leaves a RAM floor free for\n"
-                 "                       the OS file cache (the RAM margin + the larger of 3.5 GiB + two layers'\n"
-                 "                       experts and 4 GiB).\n"
+                 "                       The copy leaves --ram-reserve-mib free beside what the engine takes after it.\n"
                  "  --resident-budget-gib N  the resident mode with at most N GiB of experts in RAM (hottest first;\n"
                  "                       auto when not set: what fits);\n"
                  "                       a budget that would leave less than the RAM floor free is refused, naming\n"
-                 "                       the largest safe value.\n");
+                 "                       the largest safe value.\n", (long long) basalt::program::kDefaultContext);
 }
 
 }  // namespace basalt::program::cli
