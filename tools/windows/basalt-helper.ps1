@@ -58,6 +58,8 @@ while (-not (Test-Path $modelPath)) {
 }
 $modelRel = $modelPath
 if ($modelPath.StartsWith($Root, 'OrdinalIgnoreCase')) { $modelRel = $modelPath.Substring($Root.Length).TrimStart('\') }
+# DeepSeek-V4.1-Flash is fp16-KV-only and has no residency or relaxed-drafting flags (docs/models/index.md)
+$script:isDeepSeek = $modelPath -match '(?i)deepseek'
 
 # ---------------------------------------------------------------- fixtures (probe/bench prompt ids)
 $script:fxNeed = @('conv.ids', 'struct.ids', 'prose.ids')
@@ -112,7 +114,13 @@ if (Test-Path $flagFile) {
 } elseif ($script:configPath -and (AskY 'start the base engine flags (used by probe/bench) from the config file' 'y')) {
     $script:base = ConfigToFlags $script:configPath
 }
-if ([string]::IsNullOrWhiteSpace($script:base)) { $script:base = '--kv int8 --max-context 262144' }
+if ([string]::IsNullOrWhiteSpace($script:base)) {
+    $script:base = if ($script:isDeepSeek) { '--max-context 262144' } else { '--kv int8 --max-context 262144' }
+}
+if ($script:isDeepSeek -and $script:base -match '(^|\s)--kv(\s|$)') {
+    C '--kv: DeepSeek-V4.1-Flash runs fp16 KV only; dropped --kv from the base flags.' Yellow
+    $script:base = ($script:base -replace '(^|\s)--kv(\s+\S+)?', ' ').Trim()
+}
 $script:base = $script:base -replace '\s+', ' '
 
 C "`n--- basalt helper ---" Green
@@ -268,6 +276,10 @@ function Run-BenchLabelled($label, $flags, $reps, $withPrefill) {
 }
 
 function Run-KvCompare {
+    if ($script:isDeepSeek) {
+        C "`nDeepSeek-V4.1-Flash has no KV choice (fp16 only, docs/models/index.md): this A/B does not apply." Yellow
+        return
+    }
     C "`nSame workload, different KV formats. int8 is the usual pick; k8v4/q4_0 free VRAM for experts." Cyan
     $reps = AskDef 'repetitions per row (-r)' '2'
     $list = AskDef 'KV formats to compare' 'int8 k8v4 q4_0'
@@ -281,7 +293,12 @@ function Run-DraftCompare {
     C "`nWhat speculation costs/gains. relaxed-drafting is FASTER but changes the sampling distribution." Cyan
     $reps = AskDef 'repetitions per row (-r)' '2'
     Run-BenchLabelled 'baseline (current flags)' $script:base $reps $false
-    Run-BenchLabelled 'relaxed-drafting true'  (Override-Flag $script:base 'relaxed-drafting' 'true') $reps $false
+    if ($script:isDeepSeek) {
+        # DeepSeek has no relaxed-drafting flag; its knob is the DSpark window (--spec, default 3).
+        Run-BenchLabelled 'spec 3 (DSpark default window)' (Override-Flag $script:base 'spec' '3') $reps $false
+    } else {
+        Run-BenchLabelled 'relaxed-drafting true'  (Override-Flag $script:base 'relaxed-drafting' 'true') $reps $false
+    }
     Run-BenchLabelled 'spec 0 (no speculation)' (Override-Flag $script:base 'spec' '0') $reps $false
 }
 
@@ -296,9 +313,13 @@ function Run-Custom {
 # ---------------------------------------------------------------- menu 6: quality
 function Run-Quality {
     C "`nQuality gate: PPL/KLD/top-1 against the BF16 reference through the decode path." Cyan
-    C 'This pack''s OFFICIAL numbers are already published:' Yellow
-    C '  https://huggingface.co/jesdga/Qwen3.8-Flash-Next-Basalt#quality' Yellow
-    C 'You only need to run this yourself to measure LOSSY flags (relaxed-drafting, q4_0, k8v4...)' Yellow
+    if ($script:isDeepSeek) {
+        C 'DeepSeek-V4.1-Flash has no lossy flags to measure (docs/models/index.md): this gate scores the pack itself.' Yellow
+    } else {
+        C 'This pack''s OFFICIAL numbers are already published:' Yellow
+        C '  https://huggingface.co/jesdga/Qwen3.8-Flash-Next-Basalt#quality' Yellow
+        C 'You only need to run this yourself to measure LOSSY flags (relaxed-drafting, q4_0, k8v4...)' Yellow
+    }
     C 'against the reference. It needs the BF16 .kld base file (llama-perplexity --kl-divergence-base' Yellow
     C 'on the BF16 GGUF; see docs/precision/quality.md).' Yellow
     $kld = AskDef 'path to the .kld base file (Enter to go back)' ''
@@ -324,13 +345,16 @@ function New-Config {
     $port = [int](AskDef 'port' '8083')
     $vision = AskDef 'vision (dynamic / off)' 'dynamic'
     $ctx = [long](AskDef 'max-context tokens' '262144')
-    $kvSel = AskDef 'kv format (int8 / k8v4 / q4_0 / fp16)' 'int8'
-    $relaxed = AskY 'relaxed-drafting (faster, changes the sampling distribution)' 'y'
-    $profSave = AskY 'expert-profile-save (restarts reuse the learned expert placement)' 'y'
-
-    $engine = [ordered]@{ 'max-context' = $ctx; 'expert-cache' = 'auto'; 'prefill' = 'auto'; 'kv' = $kvSel; 'resident-experts' = $true }
-    if ($relaxed) { $engine['relaxed-drafting'] = $true }
-    if ($profSave) { $engine['expert-profile-save'] = 'basalt-learned.prof' }
+    $engine = [ordered]@{ 'max-context' = $ctx; 'expert-cache' = 'auto' }
+    if ($script:isDeepSeek) {
+        C 'DeepSeek-V4.1-Flash: fp16 KV only; no prefill/residency/relaxed-drafting flags; DSpark drafts by default.' DarkGray
+    } else {
+        $engine['prefill'] = 'auto'
+        $engine['kv'] = (AskDef 'kv format (int8 / k8v4 / q4_0 / fp16)' 'int8')
+        $engine['resident-experts'] = $true
+        if (AskY 'relaxed-drafting (faster, changes the sampling distribution)' 'y') { $engine['relaxed-drafting'] = $true }
+    }
+    if (AskY 'expert-profile-save (restarts reuse the learned expert placement)' 'y') { $engine['expert-profile-save'] = 'basalt-learned.prof' }
 
     $cfg = [pscustomobject]@{
         server = [pscustomobject]@{ model = $modelRel; gpu = "$script:gpu"; host = $hostAddr; port = $port; vision = $vision }
