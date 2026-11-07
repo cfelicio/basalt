@@ -30,11 +30,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 IS_WINDOWS = os.name == "nt"
 ENGINE_EXE = "basalt.exe" if IS_WINDOWS else "basalt"
-HF_REPO = os.environ.get("BASALT_HF_REPO", "jesdga/Qwen3.8-Flash-Next-Basalt")
+HF_REPOS = ([os.environ["BASALT_HF_REPO"]] if os.environ.get("BASALT_HF_REPO")
+            else ["jesdga/Qwen3.8-Flash-Next-Basalt", "jesdga/DeepSeek-V4.1-Flash-1017-Basalt"])
 FEED = os.environ.get("BASALT_FEED", "https://github.com/cfelicio/basalt/releases/latest/download")
 SERVER_MODULES = ["numpy", "regex", "jinja2", "yaml", "tqdm", "PIL", "psutil", "markupsafe"]
 NEED_COMPUTE = (12, 0)          # the architecture the engine is compiled for: Blackwell, sm_120
-DEFAULT_PACK = "Qwen3.8-FN-GSQ-RCO-Q2_0.basalt"    # the smallest pack in the listing
+DEFAULT_PACK = "Qwen3.8-FN-UD-IQ1_M.basalt"        # the pick when it is in a listing; else the listing's smallest
 ZIP_RE = re.compile(r"basalt-[0-9][^/\"']*windows-x64-cuda13\.zip")
 GIB = 1024 ** 3
 
@@ -105,9 +106,23 @@ def fetch(url: str, timeout: int = 30) -> bytes:
         return r.read()
 
 
-def hf_packs() -> list[tuple[str, int]]:
-    return parse_hf_tree(json.loads(fetch(f"https://huggingface.co/api/models/{HF_REPO}/tree/main?recursive=true")
-                                    .decode("utf-8", "replace")))
+def hf_packs() -> tuple[list[tuple[str, str, int]], list[str]]:
+    """The packs of every listing repo, smallest first, as (repo, path, bytes), and the repos not reachable."""
+    packs: list[tuple[str, str, int]] = []
+    dead: list[str] = []
+    for repo in HF_REPOS:
+        try:
+            entries = json.loads(fetch(f"https://huggingface.co/api/models/{repo}/tree/main?recursive=true")
+                                 .decode("utf-8", "replace"))
+        except Exception as e:
+            dead.append(f"{repo} ({type(e).__name__})")
+            continue
+        packs.extend((repo, path, size) for path, size in parse_hf_tree(entries))
+    return sorted(packs, key=lambda p: p[2]), dead
+
+
+def hf_links() -> str:
+    return " and ".join(f"https://huggingface.co/{r}" for r in HF_REPOS)
 
 
 def disk_free(path: Path) -> int:
@@ -328,18 +343,20 @@ def install_requirements(plan_only: bool) -> bool:
 
 # ------------------------------------------------------------------------------------------ model + config
 
-def model_choices(root: Path) -> tuple[list[Path], list[tuple[str, int]]]:
+def model_choices(root: Path) -> tuple[list[Path], list[tuple[str, str, int]]]:
     models_dir = root / "models"
     local = sorted(models_dir.glob("*.basalt")) if models_dir.is_dir() else []
-    remote: list[tuple[str, int]] = []
+    remote: list[tuple[str, str, int]] = []
     try:
-        remote = hf_packs()
+        remote, dead = hf_packs()
     except Exception as e:
-        say("models", f"the model listing is not reachable ({type(e).__name__}): only files on this machine are offered")
+        dead = [f"the listings ({type(e).__name__})"]
+    for d in dead:
+        say("models", f"the listing for {d} is not reachable: the other listings and this machine's files are still offered")
     return local, remote
 
 
-def download_pack(root: Path, path: str, size: int, args, plan: bool, ask) -> Path | None:
+def download_pack(root: Path, repo: str, path: str, size: int, args, plan: bool, ask) -> Path | None:
     dst = root / "models" / Path(path).name
     free = disk_free(root)
     say("model", f"{path}: {gib(size)}")
@@ -350,13 +367,13 @@ def download_pack(root: Path, path: str, size: int, args, plan: bool, ask) -> Pa
         fix("choose a smaller pack, or free disk; the list is ordered smallest first")
         return None
     if plan:
-        say("model", f"would download https://huggingface.co/{HF_REPO}/resolve/main/{path} into {dst}")
+        say("model", f"would download https://huggingface.co/{repo}/resolve/main/{path} into {dst}")
         return None
     if not args.yes and ask(f"download {gib(size)}? [y/N]: ", "n").lower() not in ("y", "yes"):
         say("model", "not downloaded; choose later")
         return None
-    if not download(f"https://huggingface.co/{HF_REPO}/resolve/main/{path}", dst):
-        fix(f"the download failed; the pack is on https://huggingface.co/{HF_REPO}")
+    if not download(f"https://huggingface.co/{repo}/resolve/main/{path}", dst):
+        fix(f"the download failed; the pack is on https://huggingface.co/{repo}")
         return None
     say("model", f"saved {dst}")
     return dst
@@ -372,22 +389,21 @@ def choose_model(root: Path, args, plan: bool, ask) -> Path | None:
         if args.model == "local" and local:
             return local[0]
         if args.model == "default" and remote:
-            pick = next((p for p in remote if p[0] == DEFAULT_PACK), remote[0])
-            return download_pack(root, pick[0], pick[1], args, plan, ask)
+            pick = next((p for p in remote if p[1] == DEFAULT_PACK), remote[0])
+            return download_pack(root, pick[0], pick[1], pick[2], args, plan, ask)
     if args.model and args.model not in ("local", "default"):
         p = Path(args.model)
         found = p if p.is_file() else root / "models" / Path(args.model).name
         if found.is_file():
             return found
         say("model", f"{args.model}: no such file")
-        fix(f"put it in {root / 'models'} or give a full path; the packs are at https://huggingface.co/{HF_REPO}")
+        fix(f"put it in {root / 'models'} or give a full path; the packs are at {hf_links()}")
         return None
 
     local, remote = model_choices(root)
     if not (local or remote):
-        say("model", "no pack on this machine and the listing is unreachable")
-        fix(f"put a .basalt file in {root / 'models'} and run START-HERE.bat again; packs are at "
-            f"https://huggingface.co/{HF_REPO}")
+        say("model", "no pack on this machine and the listings are unreachable")
+        fix(f"put a .basalt file in {root / 'models'} and run START-HERE.bat again; packs are at {hf_links()}")
         return None
 
     print()
@@ -397,10 +413,10 @@ def choose_model(root: Path, args, plan: bool, ask) -> Path | None:
         shown = p.relative_to(root) if p.is_relative_to(root) else p
         say(f"[{i}]", f"on this machine: {shown}  {gib(p.stat().st_size)}")
     off = len(local)
-    for i, (path, size) in enumerate(remote, off + 1):
-        say(f"[{i}]", f"download: {path}  {gib(size)}")
+    for i, (repo, path, size) in enumerate(remote, off + 1):
+        say(f"[{i}]", f"download: {path}  {gib(size)}  ({repo.split('/', 1)[1]})")
     say("[0]", "choose later (set server.model in basalt_config.json, then run START-HERE.bat again)")
-    default = next((i for i, (path, _) in enumerate(remote, off + 1) if path == DEFAULT_PACK), off + 1)
+    default = next((i for i, (_, path, _) in enumerate(remote, off + 1) if path == DEFAULT_PACK), off + 1)
     answer = ask(f"model [{default}]: ", str(default))
     try:
         pick = int(answer)
@@ -412,10 +428,23 @@ def choose_model(root: Path, args, plan: bool, ask) -> Path | None:
     if 1 <= pick <= len(local):
         return local[pick - 1]
     if len(local) < pick <= len(local) + len(remote):
-        path, size = remote[pick - len(local) - 1]
-        return download_pack(root, path, size, args, plan, ask)
+        repo, path, size = remote[pick - len(local) - 1]
+        return download_pack(root, repo, path, size, args, plan, ask)
     say("model", f"{answer} is not a choice")
     return None
+
+
+def is_deepseek(model: Path | None) -> bool:
+    return model is not None and "deepseek" in model.name.lower()
+
+
+def engine_defaults(model: Path | None) -> dict:
+    """Suggested values for the config's engine block, per model family (docs/models/index.md): Flash-Next
+    tunes the KV cache and expert residency; DeepSeek-V4.1-Flash is fp16-KV-only and has no residency or
+    relaxed-drafting flags, so it gets the expert-slot cap and the engine's own defaults."""
+    if is_deepseek(model):
+        return {"expert-cache": "auto"}
+    return {"expert-cache": "auto", "prefill": "auto", "kv": "int8", "resident-experts": True}
 
 
 def read_config(root: Path) -> dict:
@@ -567,7 +596,9 @@ def main() -> int:
     # 5. the settings
     gpu = pick_cards(cards, args, interactive, ask)
     port = args.port or int((read_config(ROOT).get("server") or {}).get("port") or 8080)
-    defaults = {"expert-cache": "auto", "prefill": "auto", "kv": "int8", "resident-experts": True}
+    if is_deepseek(model):
+        say("model", "DeepSeek-V4.1-Flash: fp16 KV only (no --kv), no residency flags; DSpark drafting is on by default")
+    defaults = engine_defaults(model)
     cfg = merge_config(read_config(ROOT), ROOT, model, gpu, port, defaults)
     if plan:
         say("config", "would write basalt_config.json: " + json.dumps(cfg, ensure_ascii=False))

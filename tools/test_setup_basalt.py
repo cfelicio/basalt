@@ -53,7 +53,7 @@ class Packs(unittest.TestCase):
     ENTRIES = [
         {"type": "file", "path": "README.md", "size": 120},
         {"type": "file", "path": "Qwen3.8-FN-Q8_0.basalt", "lfs": {"size": 192 * 1024 ** 3}},
-        {"type": "file", "path": "Qwen3.8-FN-GSQ-RCO-Q2_0.basalt", "lfs": {"size": 70 * 1024 ** 3}},
+        {"type": "file", "path": "Qwen3.8-FN-UD-IQ1_M.basalt", "lfs": {"size": 70 * 1024 ** 3}},
         {"type": "file", "path": "Qwen3.8-FN-UD-Q4_K_XL.basalt", "size": 115 * 1024 ** 3},
         {"type": "directory", "path": "convert"},
         {"type": "file", "path": "convert/mtp/mtp-manifest.json", "size": 30},
@@ -62,7 +62,7 @@ class Packs(unittest.TestCase):
     def test_the_packs_only_smallest_first(self):
         got = b.parse_hf_tree(self.ENTRIES)
         self.assertEqual([p for p, _ in got],
-                         ["Qwen3.8-FN-GSQ-RCO-Q2_0.basalt", "Qwen3.8-FN-UD-Q4_K_XL.basalt", "Qwen3.8-FN-Q8_0.basalt"])
+                         ["Qwen3.8-FN-UD-IQ1_M.basalt", "Qwen3.8-FN-UD-Q4_K_XL.basalt", "Qwen3.8-FN-Q8_0.basalt"])
         self.assertEqual(got[0][1], 70 * 1024 ** 3)
 
     def test_the_default_pack_is_in_the_listing(self):
@@ -228,8 +228,43 @@ class ModelChoices(unittest.TestCase):
 
     def test_a_plan_never_downloads(self):
         args = type("A", (), {"model": "default", "yes": True})()
-        with unittest.mock.patch.object(b, "hf_packs", lambda: [("Qwen3.8-FN-GSQ-RCO-Q2_0.basalt", 70 * 1024 ** 3)]):
+        listing = ([("jesdga/Qwen3.8-Flash-Next-Basalt", "Qwen3.8-FN-UD-IQ1_M.basalt", 70 * 1024 ** 3)], [])
+        with unittest.mock.patch.object(b, "hf_packs", lambda: listing):
             self.assertIsNone(b.choose_model(self.root, args, True, lambda q, d: d), "a plan asks for nothing")
+
+    def test_the_default_picks_the_named_pack_across_two_listings(self):
+        args = type("A", (), {"model": "default", "yes": True})()
+        listing = ([("jesdga/DeepSeek-V4.1-Flash-1017-Basalt", "DeepSeek-V4.1-Flash-1017-UD-IQ1_M.basalt", 242 * 1024 ** 3),
+                    ("jesdga/Qwen3.8-Flash-Next-Basalt", b.DEFAULT_PACK, 67 * 1024 ** 3)], [])
+        chosen = []
+        grab = lambda root_, repo_, path_, size_, args_, plan_, ask_: chosen.append((repo_, path_))
+        with unittest.mock.patch.object(b, "hf_packs", lambda: listing), unittest.mock.patch.object(b, "download_pack", grab):
+            b.choose_model(self.root, args, True, lambda q, d: d)
+        self.assertEqual(chosen, [("jesdga/Qwen3.8-Flash-Next-Basalt", b.DEFAULT_PACK)])
+
+    def test_a_chosen_deepseek_pack_downloads_from_its_own_repo(self):
+        args = type("A", (), {"model": "", "yes": True})()
+        listing = ([("jesdga/Qwen3.8-Flash-Next-Basalt", b.DEFAULT_PACK, 67 * 1024 ** 3),
+                    ("jesdga/DeepSeek-V4.1-Flash-1017-Basalt", "DeepSeek-V4.1-Flash-1017-UD-IQ1_M.basalt", 242 * 1024 ** 3)], [])
+        chosen = []
+        grab = lambda root_, repo_, path_, size_, args_, plan_, ask_: chosen.append((repo_, path_))
+        with unittest.mock.patch.object(b, "hf_packs", lambda: listing), unittest.mock.patch.object(b, "download_pack", grab):
+            b.choose_model(self.root, args, False, lambda q, d: "3")   # [1] the local pack, [2] the small Qwen, [3] the DeepSeek
+        self.assertEqual(chosen, [("jesdga/DeepSeek-V4.1-Flash-1017-Basalt", "DeepSeek-V4.1-Flash-1017-UD-IQ1_M.basalt")])
+
+
+class EngineDefaults(unittest.TestCase):
+    def test_flash_next_tunes_kv_and_residency(self):
+        got = b.engine_defaults(Path("Qwen3.8-FN-NVFP4-DQ6_K.basalt"))
+        self.assertEqual(got["kv"], "int8")
+        self.assertTrue(got["resident-experts"])
+
+    def test_deepseek_refuses_the_flags_it_does_not_have(self):
+        got = b.engine_defaults(Path("DeepSeek-V4.1-Flash-1017-UD-IQ1_M.basalt"))
+        self.assertEqual(got, {"expert-cache": "auto"})
+
+    def test_no_model_yet_keeps_the_flash_next_block(self):
+        self.assertIn("kv", b.engine_defaults(None))
 
 
 if __name__ == "__main__":
