@@ -123,8 +123,12 @@ foreach ($n in 'vcruntime140.dll', 'vcruntime140_1.dll', 'vcruntime140_2.dll', '
 # ---- the tree the engine and the server read beside the binaries
 Copy-Tree (Join-Path $SourceDir 'data') (Join-Path $root 'data')
 Copy-Tree (Join-Path $SourceDir 'serve') (Join-Path $root 'serve') @('tests', '__pycache__')
-Copy-Tree (Join-Path $SourceDir 'tools') (Join-Path $root 'tools') @('convert', 'migrations', '__pycache__')
+Copy-Tree (Join-Path $SourceDir 'tools') (Join-Path $root 'tools') @('convert', '__pycache__')
 Copy-Tree (Join-Path $SourceDir 'docs')  (Join-Path $root 'docs')
+# the server tells a v1 config to run the migration beside these tools; a zip without it dead-ends the first run
+if (-not (Test-Path -LiteralPath (Join-Path $root 'tools\migrations\config_v1_to_v2.py'))) {
+    throw 'the release needs tools\migrations\config_v1_to_v2.py (the server names it in its v1 refusal)'
+}
 foreach ($f in 'START-HERE.bat', 'requirements.txt', 'LICENSE', 'THIRD_PARTY_LICENSES') {
     if (-not (Test-Path -LiteralPath (Join-Path $SourceDir $f))) { throw "the release needs $f and it is not in $SourceDir" }
     Copy-Item -LiteralPath (Join-Path $SourceDir $f) -Destination $root -Force
