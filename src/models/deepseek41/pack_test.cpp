@@ -77,8 +77,8 @@ std::string layout(const std::string& line1) {
            line1 + "\n";
 }
 
-bool open(const fs::path& dir, const std::string& lay, Pack& p, std::string& err) {
-    const std::string file = write_model(dir / "m.basalt", {{"meta", kMeta}, {"experts.layout", lay}});
+bool open(const fs::path& dir, const std::string& line1, Pack& p, std::string& err) {
+    const std::string file = write_model(dir / "m.basalt", {{"meta", kMeta}, {"experts.layout", layout(line1)}});
     return open_pack(file, p, err);
 }
 
