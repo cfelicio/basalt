@@ -105,8 +105,8 @@ __global__ void __launch_bounds__(kDmThreads, 4) dm_peer_kernel(DmPeerArgs a) {
                 stamp(a.steps + s, 1);
                 if (tid < 128)   // one 128-thread item per (value head, rank), grid-strided
                     for (int it = blockIdx.x; it < 4 * R.h_v; it += nb) {
-                        if (it != (int) blockIdx.x) rec_sync<true>();
-                        rec_block<kDecMaxT, true, true>(R, mt, it >> 2, it & 3, su.r, nullptr);
+                        if (it != (int) blockIdx.x) rec_sync(1);
+                        rec_block<kDecMaxT, true>(R, mt, it >> 2, it & 3, su.r, nullptr, (int) threadIdx.x, 1);
                     }
                 if (!dm_grid_sync(w, bar, ++bars * (unsigned int) nb, &s_ok)) return;
                 stamp(a.steps + s, 2);
