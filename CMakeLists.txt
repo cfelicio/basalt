@@ -258,6 +258,12 @@ if(BUILD_TESTING)
   target_include_directories(prefill_plan_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   basalt_embed_manifest(prefill_plan_test)
   basalt_cpu_test(NAME prefill_plan_test COMMAND prefill_plan_test)
+  # the DeepSeek pack's experts.layout: its fields read, and expert formats this build does not carry refused (no GPU)
+  add_executable(pack_test src/models/deepseek41/pack_test.cpp src/models/deepseek41/pack.cpp)
+  target_include_directories(pack_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(pack_test PRIVATE core ggml_quants)
+  basalt_embed_manifest(pack_test)
+  basalt_cpu_test(NAME pack_test COMMAND pack_test)
   # shared code must not include a model; models must not include each other
   # a check of the tree's text, in bash and python3: Linux's run covers it for every platform
   if(NOT WIN32)

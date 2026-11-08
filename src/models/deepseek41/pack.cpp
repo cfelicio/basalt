@@ -1,6 +1,8 @@
 // src/models/deepseek41/pack.cpp - reads the DeepSeek-V4.1 pack's meta section.
 #include "models/deepseek41/pack.hpp"
 
+#include "basalt/ggml/ggml.h"
+
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
@@ -149,6 +151,18 @@ bool open_pack(const std::string& path, Pack& p, std::string& err) {
             unsigned long long off, by;
             if (!(ls >> l >> gu >> d >> off >> by) || l < 0 || l >= g.n_layers) {
                 err = "experts.layout: bad line '" + line + "'";
+                return false;
+            }
+            // an expert format this build does not carry has no size; the prompt path rounds a blob up to a
+            // multiple of the sizes of its two formats, so opening such a pack would crash: refuse it by name
+            // (UD-IQ2_XXS carries layer 0's down experts as Q2_K, id 10, which this ggml does not list)
+            if (ggml_type_size((enum ggml_type) gu) == 0 || ggml_type_size((enum ggml_type) d) == 0) {
+                auto fmt = [](int t) {
+                    const char* n = ggml_type_name((enum ggml_type) t);
+                    return n ? std::string(n) : "id " + std::to_string(t);
+                };
+                err = "experts.layout: layer " + std::to_string(l) + " carries expert types " + fmt((int) gu) +
+                      " and " + fmt((int) d) + ", a format this build does not carry";
                 return false;
             }
             p.experts[(size_t) l] = {(int) gu, (int) d, off, by};
