@@ -117,6 +117,7 @@ Command line `--name`; the Where column says which config block takes it.
 | `adapt-swaps` | engine | integer | 96 (`0` = off) | Flash-Next only. Most experts one round swaps into the main GPU. [adaptive](adaptive.md) |
 | `peer-adapt-swaps` | engine | integer | `adapt-swaps` | Flash-Next only. Most experts one round swaps into the peer card. |
 | `adapt-decay` | engine | number | 0.85 (0.7 with a layer split) | Flash-Next only. Factor applied to routing counts after each round. [adaptive](adaptive.md) |
+| `pcie-staging` | engine | switch | on | Flash-Next only. With the device-planned MoE tail, a decode window's layer with enough CPU misses sends a share of them over PCIe into staging, computed on the main card while the pool reads the rest; solo and batch windows alike. `no-pcie-staging: true` turns it off. |
 
 ## Prompt processing
 

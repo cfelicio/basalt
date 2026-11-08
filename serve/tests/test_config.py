@@ -282,6 +282,14 @@ class Precedence(unittest.TestCase):
         _, _, file_words, _ = parse([], {"engine": {"route-prior": 1.5}})
         self.assertEqual(file_words, ["--route-prior", "1.5"])
 
+    def test_pcie_staging_config_words(self):
+        # the staged share is on unless a config switches it off; both words reach the engine
+        for key, value, words in (("pcie-staging", True, ["--pcie-staging"]),
+                                  ("no-pcie-staging", True, ["--no-pcie-staging"]),
+                                  ("pcie-staging", False, [])):
+            _, _, file_words, _ = parse([], {"engine": {key: value}})
+            self.assertEqual(file_words, words)
+
     def test_the_command_line_wins_over_the_file(self):
         # the engine reads its words in order and a later flag wins
         _, _, file_words, cli_words = parse(["--kv", "fp16"], {"engine": {"kv": "int8"}})

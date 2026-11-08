@@ -119,6 +119,9 @@ struct Options : CommonOptions {
     /// The share (0..1) of each layer's distinct missed experts the GPU reads over PCIe from the pinned arena while the
     /// CPU computes the rest (host-planned verify windows).  Set from the startup link probe.
     double pcie_frac = -1.0;
+    /// The device-planned MoE tail's staged share: a decode window's layer sends a share of its CPU misses over PCIe
+    /// into staging while the pool reads the rest (--pcie-staging / --no-pcie-staging, on by default).
+    bool pcie_staging = true;
     /// Every `adapt_every` rounds, swap up to `adapt_swaps` of the most-routed missing experts into the VRAM tier in
     /// place of the least-routed resident ones (decayed counts).  0 = static residency.
     int adapt_every = 4;
