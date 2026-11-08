@@ -142,27 +142,83 @@ class Settings(unittest.TestCase):
         self.assertFalse(f.is_file(), "the broken file moved aside, so the new one is not appended to it")
 
     def test_the_values_that_are_asked_for_win_over_the_old_ones(self):
-        old = {"server": {"model": "models/old.basalt", "port": 9000, "access": "lan"}, "engine": {"kv": "q8"}}
+        old = {"version": 2, "server": {"port": 9000, "access": "lan"}, "engine": {"kv": "q8"},
+               "models": [{"model": "models/old.basalt", "gpu": "0"}]}
         cfg = b.merge_config(old, self.root, self.root / "models" / "new.basalt", "0,1", 8080,
                              {"expert-cache": "auto", "kv": "int8"})
-        self.assertEqual(cfg["server"]["model"], "models/new.basalt", "a model inside the folder is a relative path")
+        self.assertEqual(cfg["version"], 2)
+        self.assertEqual(cfg["models"][0]["model"], "models/new.basalt",
+                         "the chosen model leads the list, inside the folder as a relative path")
+        self.assertEqual(cfg["models"][0]["gpu"], "0,1", "the cards asked for go with the model, not the server")
+        self.assertEqual([e["model"] for e in cfg["models"]], ["models/new.basalt", "models/old.basalt"],
+                         "a model the file already named stays in the list")
         self.assertEqual(cfg["server"]["access"], "lan", "a setting nobody asked about is kept")
-        self.assertEqual(cfg["server"]["gpu"], "0,1")
+        self.assertNotIn("model", cfg["server"], "v2 keeps the model out of the server section")
         self.assertEqual(cfg["server"]["port"], 8080)
         self.assertEqual(cfg["engine"]["kv"], "q8", "the engine's own setting wins over the suggested default")
         self.assertEqual(cfg["engine"]["expert-cache"], "auto", "a suggested default lands when nothing set it")
+
+    def test_choosing_a_listed_model_keeps_its_entry_and_its_settings(self):
+        old = {"version": 2, "models": [{"model": "models/a.basalt"}, {"model": "models/b.basalt", "alias": "bee"}]}
+        cfg = b.merge_config(old, self.root, self.root / "models" / "b.basalt", "0", 0, {})
+        self.assertEqual([e["model"] for e in cfg["models"]], ["models/b.basalt", "models/a.basalt"])
+        self.assertEqual(cfg["models"][0].get("alias"), "bee", "the entry's own settings survive the reorder")
 
     def test_a_model_outside_the_folder_stays_a_full_path(self):
         with tempfile.TemporaryDirectory() as other:
             model = Path(other) / "pack.basalt"
             cfg = b.merge_config({}, self.root, model, "0", 8080, {})
-            self.assertEqual(cfg["server"]["model"], str(model))
+            self.assertEqual(cfg["models"][0]["model"], str(model))
 
     def test_what_is_written_is_what_is_read_and_needs_no_bom(self):
         cfg = b.merge_config({}, self.root, self.root / "models" / "p.basalt", "0", 8080, {"kv": "int8"})
         f = b.write_config(self.root, cfg)
         self.assertEqual(json.loads(f.read_text(encoding="utf-8"))["engine"]["kv"], "int8")
         self.assertEqual(f.read_bytes()[:3], b"{\n ", "no byte-order mark: the engine reads the file as plain UTF-8")
+
+
+class V1toV2(unittest.TestCase):
+    """The setup migrates the v1 files the older starter wrote, using the tool beside it."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_a_v2_file_passes_through(self):
+        v2 = {"version": 2, "server": {"port": 9000}, "engine": {"expert-cache": "auto"},
+              "models": [{"model": "models/a.basalt", "gpu": "0"}]}
+        cfg, note, replaced = b.to_v2(v2)
+        self.assertEqual(cfg, v2)
+        self.assertEqual((note, replaced), ("", False))
+
+    def test_a_v1_file_moves_the_model_into_the_list(self):
+        v1 = {"server": {"model": "models/deep.basalt", "gpu": "0,1", "port": 8080},
+              "engine": {"kv": "int8", "expert-cache": "auto"}}
+        cfg, note, replaced = b.to_v2(v1)
+        self.assertFalse(replaced, "the migration tool beside the script reads it")
+        self.assertEqual(cfg["version"], 2)
+        self.assertEqual(cfg["models"][0]["model"], "models/deep.basalt")
+        self.assertEqual(cfg["models"][0]["gpu"], "0,1", "the cards leave \"server\" for the model entry")
+        self.assertEqual(cfg["models"][0]["kv"], "int8", "a per-model flag goes into the entry")
+        self.assertEqual(cfg["server"], {"port": 8080}, "what the whole server shares stays")
+        self.assertEqual(cfg["engine"], {"expert-cache": "auto"}, "what every model takes goes to the top-level engine")
+
+    def test_a_v1_file_naming_no_model_starts_fresh_and_is_kept_aside(self):
+        cfg, note, replaced = b.to_v2({"server": {"port": 9000}})
+        self.assertEqual(cfg, {"version": 2, "models": []})
+        self.assertTrue(replaced, "the caller keeps the file the migration refused as .bak")
+        self.assertIn("cannot migrate", note)
+
+    def test_the_migrated_file_is_what_the_setup_then_merges_into(self):
+        v1 = {"server": {"model": "models/old.basalt", "port": 9000}}
+        migrated, _, _ = b.to_v2(v1)
+        cfg = b.merge_config(migrated, self.root, self.root / "models" / "new.basalt", "0", 8080,
+                             {"expert-cache": "auto"})
+        self.assertEqual([e["model"] for e in cfg["models"]], ["models/new.basalt", "models/old.basalt"])
+        self.assertEqual(cfg["server"]["port"], 8080)
 
 
 class Engine(unittest.TestCase):

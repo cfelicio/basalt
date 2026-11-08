@@ -382,7 +382,7 @@ def download_pack(root: Path, repo: str, path: str, size: int, args, plan: bool,
 def choose_model(root: Path, args, plan: bool, ask) -> Path | None:
     """The model to serve, or None when the choice is left for later."""
     if args.model == "skip":
-        say("model", "left for later: set server.model in basalt_config.json, then run START-HERE.bat again")
+        say("model", 'left for later: add the file to "models" in basalt_config.json, then run START-HERE.bat again')
         return None
     if args.model in ("local", "default") and not args.model.endswith(".basalt"):
         local, remote = model_choices(root)
@@ -415,7 +415,7 @@ def choose_model(root: Path, args, plan: bool, ask) -> Path | None:
     off = len(local)
     for i, (repo, path, size) in enumerate(remote, off + 1):
         say(f"[{i}]", f"download: {path}  {gib(size)}  ({repo.split('/', 1)[1]})")
-    say("[0]", "choose later (set server.model in basalt_config.json, then run START-HERE.bat again)")
+    say("[0]", 'choose later (add the file to "models" in basalt_config.json, then run START-HERE.bat again)')
     default = next((i for i, (_, path, _) in enumerate(remote, off + 1) if path == DEFAULT_PACK), off + 1)
     answer = ask(f"model [{default}]: ", str(default))
     try:
@@ -423,7 +423,7 @@ def choose_model(root: Path, args, plan: bool, ask) -> Path | None:
     except ValueError:
         pick = 0
     if pick == 0:
-        say("model", "left for later: set server.model in basalt_config.json, then run START-HERE.bat again")
+        say("model", 'left for later: add the file to "models" in basalt_config.json, then run START-HERE.bat again')
         return None
     if 1 <= pick <= len(local):
         return local[pick - 1]
@@ -464,19 +464,52 @@ def read_config(root: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def merge_config(existing: dict, root: Path, model: Path | None, gpu: str, port: int, engine_defaults: dict) -> dict:
-    """What to write: the settings that are already there win, except the values this run was told."""
-    cfg = json.loads(json.dumps(existing)) if existing else {}
+def to_v2(existing: dict) -> tuple[dict, str, bool]:
+    """The existing settings in the v2 shape the server reads: (cfg, note, keep_old_as_bak).
+
+    A v2 file passes through; a v1 file goes through the migration tool beside this script
+    (``tools/migrations/config_v1_to_v2.py``, the one the server's own refusal names), so both read it the same
+    way. When that cannot run or refuses the file, the caller starts fresh and keeps the old one as ``.bak``.
+    """
+    if not existing:
+        return {"version": 2, "models": []}, "", False
+    if isinstance(existing.get("models"), list) and existing.get("version", 2) == 2:
+        cfg = json.loads(json.dumps(existing))
+        cfg["version"] = 2
+        return cfg, "", False
+    try:
+        path = ROOT / "tools" / "migrations" / "config_v1_to_v2.py"
+        spec = importlib.util.spec_from_file_location("config_v1_to_v2", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        cfg = mod.migrated(existing)
+    except (OSError, ValueError, AttributeError, TypeError) as e:
+        return {"version": 2, "models": []}, f"cannot migrate the v1 config: {e}", True
+    return cfg, "the v1 config moved to the v2 shape: the model and its settings are now an entry of \"models\"", False
+
+
+def merge_config(cfg: dict, root: Path, model: Path | None, gpu: str, port: int, engine_defaults: dict) -> dict:
+    """What to write, `cfg` already in the v2 shape: the settings that are already there win, except the values
+    this run was told. The chosen model leads ``models`` and carries the cards; models the file already named
+    stay in the list."""
+    cfg = json.loads(json.dumps(cfg)) if cfg else {"version": 2, "models": []}
+    cfg["version"] = 2
     server, engine = dict(cfg.get("server") or {}), dict(cfg.get("engine") or {})
+    entries = [e for e in cfg.get("models") or [] if isinstance(e, dict)]
     if model is not None:
         # a model inside the folder is written with forward slashes, the way the docs' examples write it
-        server["model"] = model.relative_to(root).as_posix() if model.is_relative_to(root) else str(model)
-    if gpu:
-        server["gpu"] = gpu
+        rel = model.relative_to(root).as_posix() if model.is_relative_to(root) else str(model)
+        lead = [e for e in entries if str(e.get("model", "")).replace("\\", "/") == rel]
+        entries = lead + [e for e in entries if e not in lead]
+        if not lead:
+            entries.insert(0, {"model": rel})
+    if gpu and entries:
+        entries[0]["gpu"] = gpu
     if port:
         server["port"] = port
     for k, v in engine_defaults.items():
         engine.setdefault(k, v)
+    cfg["models"] = entries
     cfg["server"], cfg["engine"] = server, engine
     return cfg
 
@@ -599,10 +632,17 @@ def main() -> int:
     if is_deepseek(model):
         say("model", "DeepSeek-V4.1-Flash: fp16 KV only (no --kv), no residency flags; DSpark drafting is on by default")
     defaults = engine_defaults(model)
-    cfg = merge_config(read_config(ROOT), ROOT, model, gpu, port, defaults)
+    existing, note, replaced = to_v2(read_config(ROOT))
+    if note:
+        say("config", note)
+    cfg = merge_config(existing, ROOT, model, gpu, port, defaults)
     if plan:
         say("config", "would write basalt_config.json: " + json.dumps(cfg, ensure_ascii=False))
     else:
+        f = ROOT / "basalt_config.json"
+        if replaced and f.is_file():
+            f.replace(f.with_name(f.name + ".bak"))
+            say("config", f"the config that would not migrate is kept as {f.name}.bak")
         write_config(ROOT, cfg)
 
     # 6. serve
