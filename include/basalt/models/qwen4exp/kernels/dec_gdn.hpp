@@ -46,7 +46,8 @@ struct DecRecArgs {
 };
 
 /// The recurrence of tokens [0, n_tok) from the untouched state; one cluster of four blocks per value head (of the
-/// head map's value heads when a.nk > 0).
+/// head map's value heads when a.nk > 0).  On a card where that launch runs in two waves (a cluster keeps two CTAs
+/// a SM) and the head count is even, two value heads a block take one wave; the same bits either way.
 void dec_gdn_rec(const DecRecArgs& a, int n_tok, void* stream);
 
 /// dec_gdn_rec over a segmented window (verify_kernels.hpp SegRow): each segment's tokens from its own state (the

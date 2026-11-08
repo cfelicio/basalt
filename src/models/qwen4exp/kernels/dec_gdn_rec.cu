@@ -6,6 +6,9 @@
 //
 // A cluster of four blocks per value head; block `rank` owns state columns [32 rank, 32 rank + 32), thread
 // (warp rg, lane c) the rows [32 rg, 32 rg + 32) of column 32 rank + c, as gdn_step_commit_kernel splits them.
+// A cluster launch keeps at most two CTAs a SM, so on a card with fewer SMs than twice the value heads the
+// one-head launch runs in two waves; rec2_kernel takes two value heads a 2S-thread block, its halves on named
+// barriers, and the same bits.
 // Each column's sums are the reference's: four 32-row fmaf chains added in row-group order.  The head's RMS norm
 // adds the four warps' butterflies in rank order through distributed shared memory; rank 0 computes alpha, rank 1
 // beta, and the others read them the same way.  The state and every constant are loaded before the grid
@@ -157,19 +160,20 @@ __device__ __forceinline__ float sq32(float v) {
     return q;
 }
 
-// The block's barrier.  SUB: only threads [0, S) of a larger block run the head (named barrier 1).
-template<bool SUB>
-__device__ __forceinline__ void rec_sync() {
-    if (SUB) asm volatile("bar.sync 1, %0;" ::"n"(S) : "memory");
-    else __syncthreads();
+// The block's barrier.  bid 0 is the whole block; otherwise the named barrier a part of a larger block takes:
+// the mid chain's item with its head on threads [0, S), and a half of a paired (rec2) block.
+__device__ __forceinline__ void rec_sync(int bid) {
+    if (bid == 0) __syncthreads();
+    else asm volatile("bar.sync %0, %1;" ::"r"(bid), "n"(S) : "memory");
 }
 
-// One block of a head's cluster.  `head` = the launch's value head (head_map), `rank` = its column group.  SPLIT: no cluster and no z; the
-// head's raw output goes to a.o for dec_gdn_rec_norm.
-template<int MAXT, bool SPLIT, bool SUB = false>
+// One block (or one half of a paired block) of a head's cluster.  `head` = the launch's value head (head_map),
+// `rank` = its column group, `tid` the head's local thread index and `bid` its barrier.  SPLIT: no cluster and
+// no z; the head's raw output goes to a.o for dec_gdn_rec_norm.
+template<int MAXT, bool SPLIT>
 __device__ __forceinline__ void rec_block(const DecRecArgs& a, int T, int head, int rank, RecSmem& sm,
-                                          cg::cluster_group* cluster) {
-    const int rg = threadIdx.x / 32, lane = threadIdx.x % 32, tid = threadIdx.x;
+                                          cg::cluster_group* cluster, int tid, int bid) {
+    const int rg = tid / 32, lane = tid % 32;
     stamp(a, 0);
     const int col = rank * 32 + lane;
     const HeadMap hm = head_map(a, head);
@@ -206,7 +210,7 @@ __device__ __forceinline__ void rec_block(const DecRecArgs& a, int T, int head, 
     // alpha and beta read only the hc output and constants, both complete before this kernel can launch (its
     // predecessor passed its own wait on the hc read), so they are computed while the projections still run
     asm volatile("cp.async.wait_all;" ::: "memory");
-    rec_sync<SUB>();
+    rec_sync(bid);
     for (int job = rg; job < 2 * T; job += RG) {   // (gate, token) jobs over the four warps
         const int t = job >> 1;
         const bool is_beta = job & 1;
@@ -255,7 +259,7 @@ __device__ __forceinline__ void rec_block(const DecRecArgs& a, int T, int head, 
             a.h[(size_t) t * C + cv] = yv;
         }
     }
-    rec_sync<SUB>();
+    rec_sync(bid);
     const bool write_qk = rank == 0 && head < hm.nkl;
 #pragma unroll
     for (int t = 0; t < MAXT; ++t) {
@@ -276,7 +280,7 @@ __device__ __forceinline__ void rec_block(const DecRecArgs& a, int T, int head, 
         if (rank == 1) a.beta[(size_t) tid * a.h_v + gh] = sm.b[tid];
     }
     stamp(a, 4);
-    rec_sync<SUB>();
+    rec_sync(bid);
     stamp(a, 5);
 
     // ---- the recurrence: gdn_step_norm_multi_kernel's sums
@@ -287,7 +291,7 @@ __device__ __forceinline__ void rec_block(const DecRecArgs& a, int T, int head, 
 #pragma unroll
         for (int r = 0; r < RPG; ++r) kv = fmaf(s[r], sm.kn[t][rg * RPG + r], kv);
         sm.red_kv[rg][lane] = kv;
-        rec_sync<SUB>();
+        rec_sync(bid);
         const float kv_col = sm.red_kv[0][lane] + sm.red_kv[1][lane] + sm.red_kv[2][lane] + sm.red_kv[3][lane];
         const float delta = (sm.v[t][lane] - g * kv_col) * sm.b[t];
         float o = 0.0f;
@@ -297,7 +301,7 @@ __device__ __forceinline__ void rec_block(const DecRecArgs& a, int T, int head, 
             o = fmaf(s[r], sm.qn[t][rg * RPG + r], o);
         }
         sm.red_o[rg][lane] = o;
-        rec_sync<SUB>();
+        rec_sync(bid);
         if (rg == 0) {
             const float oc = (sm.red_o[0][lane] + sm.red_o[1][lane] + sm.red_o[2][lane] + sm.red_o[3][lane]) *
                              rsqrtf((float) S);
@@ -340,13 +344,27 @@ template<int MAXT>
 __global__ void __cluster_dims__(4, 1, 1) __launch_bounds__(S) rec_kernel(const DecRecArgs a, int T) {
     __shared__ RecSmem sm;
     cg::cluster_group cl = cg::this_cluster();
-    rec_block<MAXT, false>(a, T, blockIdx.x / 4, blockIdx.x % 4, sm, &cl);
+    rec_block<MAXT, false>(a, T, blockIdx.x / 4, blockIdx.x % 4, sm, &cl, threadIdx.x, 0);
+}
+
+// Two value heads a block: a cluster launch keeps at most two CTAs a SM, so the one-head launch of 4 CTAs
+// per head runs in two waves on a card with fewer than twice the heads' worth of SMs.  Each S-thread half
+// runs one head's block of rec_kernel on its named barrier (the pair's cluster is still the four column
+// ranks), so every head's arithmetic is the one-head launch's, instruction for instruction; a launch with
+// an odd head count takes rec_kernel.
+template<int MAXT>
+__global__ void __cluster_dims__(4, 1, 1) __launch_bounds__(2 * S, 2) rec2_kernel(const DecRecArgs a, int T) {
+    __shared__ RecSmem sm[2];
+    cg::cluster_group cl = cg::this_cluster();
+    const int half = threadIdx.x / S;
+    rec_block<MAXT, false>(a, T, blockIdx.x / 4 * 2 + half, blockIdx.x % 4, sm[half], &cl,
+                           threadIdx.x % S, half + 1);
 }
 
 template<int MAXT>
 __global__ void __launch_bounds__(S) rec_split_kernel(const DecRecArgs a, int T) {
     __shared__ RecSmem sm;
-    rec_block<MAXT, true>(a, T, blockIdx.x / 4, blockIdx.x % 4, sm, nullptr);
+    rec_block<MAXT, true>(a, T, blockIdx.x / 4, blockIdx.x % 4, sm, nullptr, threadIdx.x, 0);
 }
 
 // rec_kernel over a segmented window: cluster row y is a window row, of which only a segment's first works, on the
@@ -365,7 +383,28 @@ __global__ void __cluster_dims__(4, 1, 1) __launch_bounds__(S) rec_seg_kernel(co
     a.gate += r0 * a.h_v; a.beta += r0 * a.h_v;
     if (a.y) a.y += r0 * vd;
     a.yq = static_cast<char*>(a.yq) + r0 * (vd / 32) * sizeof(Q81);
-    rec_block<MAXT, false>(a, r.n, blockIdx.x / 4, blockIdx.x % 4, sm, &cl);
+    rec_block<MAXT, false>(a, r.n, blockIdx.x / 4, blockIdx.x % 4, sm, &cl, threadIdx.x, 0);
+}
+
+// rec_seg_kernel with two value heads a block, as rec2_kernel is to rec_kernel
+template<int MAXT>
+__global__ void __cluster_dims__(4, 1, 1) __launch_bounds__(2 * S, 2) rec2_seg_kernel(const DecRecArgs a0,
+                                                                                      const SegRow* rows,
+                                                                                      size_t state_off) {
+    const SegRow r = rows[blockIdx.y];
+    if (r.j != 0) return;
+    __shared__ RecSmem sm[2];
+    cg::cluster_group cl = cg::this_cluster();
+    DecRecArgs a = a0;
+    const size_t vd = (size_t) S * a.h_v, r0 = (size_t) r.row0;
+    a.state = r.gdn + state_off;
+    a.qkv += r0 * a.C; a.x += r0 * a.n_embd; a.z += r0 * vd; a.h += r0 * a.C;
+    a.gate += r0 * a.h_v; a.beta += r0 * a.h_v;
+    if (a.y) a.y += r0 * vd;
+    a.yq = static_cast<char*>(a.yq) + r0 * (vd / 32) * sizeof(Q81);
+    const int half = threadIdx.x / S;
+    rec_block<MAXT, false>(a, r.n, blockIdx.x / 4 * 2 + half, blockIdx.x % 4, sm[half], &cl,
+                           threadIdx.x % S, half + 1);
 }
 
 // one warp per (token, value head): the head's four 32-value sums of squares in rank order, then norm_q8 per rank
@@ -398,15 +437,41 @@ static int mapped_heads(const DecRecArgs& a) {
     return a.nk * (a.h_v / a.h_k);
 }
 
+// A cluster launch keeps at most two CTAs a SM, so the one-head launch of heads * 4 of them runs in two
+// waves on a card with fewer SMs than twice the value heads; two heads a block take one wave there.  The
+// SM count, per device; 0: not asked yet, -1: the query failed, and one head a block it stays.
+static int sm_count(int dev) {
+    static int cache[64] = {};
+    int& v = cache[dev];
+    if (v == 0) {
+        if (cudaDeviceGetAttribute(&v, cudaDevAttrMultiProcessorCount, dev) != cudaSuccess) v = -1;
+        cudaGetLastError();
+    }
+    return v;
+}
+static bool pair_the_heads(int heads) {
+    if (heads % 2 != 0) return false;
+    int dev = 0;
+    if (cudaGetDevice(&dev) != cudaSuccess || dev < 0 || dev >= 64) { cudaGetLastError(); return false; }
+    const int sm = sm_count(dev);
+    return sm > 0 && heads * 4 > 2 * sm;
+}
+
 void dec_gdn_rec(const DecRecArgs& a, int n_tok, void* stream) {
     if (n_tok < 1 || n_tok > kDecMaxT || a.n_embd != 32 * 8 * NJ || a.h_k <= 0 || a.h_v % a.h_k != 0 ||
         mapped_heads(a) < 1) {
         basalt::log::error("basalt", "dec_gdn_rec: invalid arguments");
         std::exit(1);
     }
-    const dim3 grid((unsigned) (mapped_heads(a) * 4)), block(S);
+    const int heads = mapped_heads(a);
+    const bool pair = pair_the_heads(heads);
+    const dim3 grid((unsigned) (pair ? heads * 2 : heads * 4)), block(pair ? 2 * S : S);
     const cudaStream_t s = (cudaStream_t) stream;
-    if (n_tok <= 2) launch_pdl(rec_kernel<2>, grid, block, 0, s, a, n_tok);
+    if (pair) {
+        if (n_tok <= 2) launch_pdl(rec2_kernel<2>, grid, block, 0, s, a, n_tok);
+        else if (n_tok <= 4) launch_pdl(rec2_kernel<4>, grid, block, 0, s, a, n_tok);
+        else launch_pdl(rec2_kernel<kDecMaxT>, grid, block, 0, s, a, n_tok);
+    } else if (n_tok <= 2) launch_pdl(rec_kernel<2>, grid, block, 0, s, a, n_tok);
     else if (n_tok <= 4) launch_pdl(rec_kernel<4>, grid, block, 0, s, a, n_tok);
     else launch_pdl(rec_kernel<kDecMaxT>, grid, block, 0, s, a, n_tok);
     const cudaError_t e = cudaGetLastError();
@@ -419,9 +484,14 @@ void dec_gdn_rec_seg(const DecRecArgs& a, const SegRow* rows, size_t state_off, 
         basalt::log::error("basalt", "dec_gdn_rec_seg: invalid arguments");
         std::exit(1);
     }
-    const dim3 grid((unsigned) (a.h_v * 4), (unsigned) n_rows), block(S);
+    const bool pair = pair_the_heads(a.h_v);
+    const dim3 grid((unsigned) (pair ? a.h_v * 2 : a.h_v * 4), (unsigned) n_rows), block(pair ? 2 * S : S);
     const cudaStream_t s = (cudaStream_t) stream;
-    if (max_n <= 2) launch_pdl(rec_seg_kernel<2>, grid, block, 0, s, a, rows, state_off);
+    if (pair) {
+        if (max_n <= 2) launch_pdl(rec2_seg_kernel<2>, grid, block, 0, s, a, rows, state_off);
+        else if (max_n <= 4) launch_pdl(rec2_seg_kernel<4>, grid, block, 0, s, a, rows, state_off);
+        else launch_pdl(rec2_seg_kernel<kDecMaxT>, grid, block, 0, s, a, rows, state_off);
+    } else if (max_n <= 2) launch_pdl(rec_seg_kernel<2>, grid, block, 0, s, a, rows, state_off);
     else if (max_n <= 4) launch_pdl(rec_seg_kernel<4>, grid, block, 0, s, a, rows, state_off);
     else launch_pdl(rec_seg_kernel<kDecMaxT>, grid, block, 0, s, a, rows, state_off);
     const cudaError_t e = cudaGetLastError();
