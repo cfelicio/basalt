@@ -100,18 +100,23 @@ endfunction()
 # __AVX512VBMI__ undefined, while accepting the intrinsics of all three. The sources branch on those macros (the
 # ggml dot products pick their VNNI form by __AVX512VNNI__), so they are defined to match what the GNU flags give:
 # without it a file compiles down its no-VNNI path and runs slower than the same build on Linux. __BMI2__ is left
-# alone because -mavx2 and -mavx512* do not enable BMI2 either, so that branch is out on both platforms.
+# alone on the plain AVX2 and AVX-512 rungs (-mavx2 and -mavx512* do not enable BMI2, so that branch is out on both
+# platforms); the avx2bmi2 ggml dots object below is the one that turns it on, where the branch is the point.
 if(MSVC)
   set(_isa_avx512_flags "/arch:AVX512;-D__F16C__=1;-D__AVX512VNNI__=1;-D__AVX512VBMI__=1")
   set(_isa_avx2_flags "/arch:AVX2;-D__F16C__=1")
   set(_isa_avxvnni_flags "/arch:AVX2;-D__F16C__=1")
   set(_isa_avxvnniint8_flags "/arch:AVX2;-D__F16C__=1")
+  # the BMI2 rung: the AVX2 flags (MSVC takes the pdep/pext intrinsics without a switch), and its ggml dots
+  # object carries -D__BMI2__=1 below, where the branch on it is the point of the object
+  set(_isa_bmi2_flags "/arch:AVX2;-D__F16C__=1")
   set(_isa_avx1_flags "/arch:AVX")
 else()
   set(_isa_avx512_flags "-mavx512f;-mavx512bw;-mavx512vl;-mavx512dq;-mavx512vnni;-mavx512vbmi;-mf16c;-mfma")
   set(_isa_avx2_flags "-mavx2;-mfma;-mf16c")
   set(_isa_avxvnni_flags "-mavx2;-mfma;-mf16c;-mavxvnni;-mbmi2")
   set(_isa_avxvnniint8_flags "-mavx2;-mfma;-mf16c;-mavxvnniint8")
+  set(_isa_bmi2_flags "-mavx2;-mfma;-mf16c;-mbmi2")
   set(_isa_avx1_flags "-mavx")
 endif()
 
@@ -1251,28 +1256,36 @@ target_link_libraries(kernels_cpu PUBLIC Threads::Threads platform)
 add_library(ggml_quants STATIC src/kernels/cpu/ggml/ggml_quants.c)
 target_include_directories(ggml_quants PUBLIC include PRIVATE src/kernels/cpu/ggml)
 set_target_properties(ggml_quants PROPERTIES C_STANDARD 11 C_EXTENSIONS ON POSITION_INDEPENDENT_CODE ON)
-# The CPU dot products are built for AVX2 and for AVX-512, each with its own name for the table lookup;
-# ggml_cpu_dispatch.cpp picks one at run time (cpu_avx512_ok / cpu_avx2_ok).
+# The CPU dot products are built for AVX2, for AVX2 with BMI2 (its __BMI2__ branch: the IQ1_S and IQ1_M grid
+# indices by pdep/pext - GNU's -mbmi2 predefines __BMI2__, MSVC does not, so MSVC gets the define below), and for
+# AVX-512, each with its own name for the table lookup;
+# ggml_cpu_dispatch.cpp picks one at run time (cpu_avx512_ok / cpu_pdep_ok / cpu_avx2_ok).
 set(_ggml_dots_avx2_flags ${_isa_avx2_flags})
+set(_ggml_dots_avx2bmi2_flags ${_isa_bmi2_flags})
 set(_ggml_dots_avx512_flags ${_isa_avx512_flags})
-foreach(_isa avx2 avx512)
+foreach(_isa avx2 avx2bmi2 avx512)
   add_library(ggml_dots_${_isa} OBJECT src/kernels/cpu/ggml/ggml_cpu_dots.c)
   target_include_directories(ggml_dots_${_isa} PRIVATE include src/kernels/cpu/ggml)
   target_compile_options(ggml_dots_${_isa} PRIVATE ${_ggml_dots_${_isa}_flags})
   target_compile_definitions(ggml_dots_${_isa} PRIVATE ggml_get_type_traits_cpu=ggml_get_type_traits_cpu_${_isa})
   set_target_properties(ggml_dots_${_isa} PROPERTIES C_STANDARD 11 C_EXTENSIONS ON POSITION_INDEPENDENT_CODE ON)
 endforeach()
+if(MSVC)
+  target_compile_definitions(ggml_dots_avx2bmi2 PRIVATE __BMI2__=1)
+endif()
 # part of kernels_cpu (the pool calls these and they call its CPU probe: one library, so GNU ld's
 # one-pass static linking has no cycle to resolve)
 target_sources(kernels_cpu PRIVATE src/kernels/cpu/native_expert.cpp src/kernels/cpu/iq_avx512.cpp
                                          src/kernels/cpu/nvfp4_avx512.cpp
                                          src/kernels/cpu/nvfp4_avx2.cpp src/kernels/cpu/nvfp4_avx2_vnni.cpp
                                          src/kernels/cpu/iq_avx2.cpp src/kernels/cpu/iq_avx2_vnni.cpp
+                                         src/kernels/cpu/iq_avx2_bmi2.cpp
                                          src/kernels/cpu/kq_avx2.cpp
                                          src/kernels/cpu/kq_avx1.cpp src/kernels/cpu/ggml/ggml_cpu_dispatch.cpp
-                                         $<TARGET_OBJECTS:ggml_dots_avx2> $<TARGET_OBJECTS:ggml_dots_avx512>)
-# the i-quant rows also use BMI2 (pdep/pext for the sign masks; cpu_avx512_ok requires it). MSVC compiles the
-# intrinsics without a switch.
+                                         $<TARGET_OBJECTS:ggml_dots_avx2> $<TARGET_OBJECTS:ggml_dots_avx2bmi2>
+                                         $<TARGET_OBJECTS:ggml_dots_avx512>)
+# the i-quant rows also use BMI2 (pdep/pext for the sign masks; cpu_avx512_ok requires it, cpu_pdep_ok builds the
+# AVX2 rows' signs with them). MSVC compiles the intrinsics without a switch.
 if(MSVC)
   set_source_files_properties(src/kernels/cpu/iq_avx512.cpp PROPERTIES COMPILE_OPTIONS "${_isa_avx512_flags}")
 else()
@@ -1283,6 +1296,8 @@ set_source_files_properties(src/kernels/cpu/nvfp4_avx512.cpp PROPERTIES COMPILE_
 set_source_files_properties(src/kernels/cpu/iq_avx2.cpp PROPERTIES COMPILE_OPTIONS "${_isa_avx2_flags}")
 # the same rows with the AVX-VNNI instructions and BMI2 (pdep for the grid indices), called only behind cpu_avxvnni_ok()
 set_source_files_properties(src/kernels/cpu/iq_avx2_vnni.cpp PROPERTIES COMPILE_OPTIONS "${_isa_avxvnni_flags}")
+# the same rows on the base arithmetic, the signs and grid indices built by BMI2, called only behind cpu_pdep_ok()
+set_source_files_properties(src/kernels/cpu/iq_avx2_bmi2.cpp PROPERTIES COMPILE_OPTIONS "${_isa_bmi2_flags}")
 set_source_files_properties(src/kernels/cpu/nvfp4_avx2.cpp PROPERTIES COMPILE_OPTIONS "${_isa_avx2_flags}")
 # the same rows with AVX-VNNI-INT8 (`vpdpbssd`), called only behind cpu_avxvnni_int8_ok()
 set_source_files_properties(src/kernels/cpu/nvfp4_avx2_vnni.cpp PROPERTIES COMPILE_OPTIONS "${_isa_avxvnniint8_flags}")
