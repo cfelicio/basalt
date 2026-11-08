@@ -83,14 +83,16 @@ struct DecMoe {
     };
     std::vector<XPeer> xp;
     // the staged share (a card without peers): every expert's host-RAM address (device alias) or 0, its host copy and
-    // the source's places it was read at, the staged count per count of distinct CPU misses, the copy's own stream
+    // the source's places it was read at, the staged count per count of distinct CPU misses (a table per layer, the
+    // pack may mix blob sizes), the copy's own stream, and per layer its slot stride and whether it stages at all
     unsigned long long* stage_src = nullptr;
     unsigned long long* stage_host = nullptr;
     uint64_t stage_gen = 0;
-    int32_t* stage_k = nullptr;
+    int32_t* stage_k = nullptr;   // [n_layers][kDmCap + 1]
     cudaStream_t st_s = nullptr;
     cudaEvent_t st_fork = nullptr, st_join = nullptr;
-    int64_t stage_stride = 0;
+    std::vector<int64_t> stage_stride_l;   // per layer (empty: the share is off)
+    std::vector<uint8_t> stage_on_l;       // per layer: its blobs may be staged (16-byte-sized, a mapped RAM copy)
     int stage_blocks = 0;
     int stage_min = 0;   // the fewest distinct CPU misses a layer stages a share of
     // pinned staging of the residency uploads: the copies take their source from here, so the call does

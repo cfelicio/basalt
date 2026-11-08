@@ -194,47 +194,66 @@ bool Verifier::dm_init(std::string& err) {
         w->logits.assign((size_t) kVerifyMaxT * g.n_expert, 0.0f);
         d->warm = w;
     }
-    // The staged share: on one card, a batch window's layer with enough CPU misses sends some of them to CUDA0, copied
-    // over PCIe from their RAM copies into staging while the pool reads the rest.  An expert without a mapped RAM copy
-    // is never staged; the addresses are read again before a batch window when the source's places moved (a swap).
-    // The count staged for m misses balances the pool's time for the rest against the copy's, both reading host
-    // memory at once.
+    // The staged share: on one card, a decode window's layer with enough CPU misses sends some of them to CUDA0, copied
+    // over PCIe from their RAM copies into staging while the pool reads the rest; a solo window takes part like a batch
+    // one.  An expert without a mapped RAM copy is never staged, and a layer whose blob size is not 16-byte-sized never
+    // stages at all; the addresses are read again before a window when the source's places moved (a swap).  The count
+    // staged for m misses balances the pool's time for the rest against the copy's, both reading host memory at once -
+    // per layer, since a pack may mix blob sizes.
     bool stage = d->pdev < 0 && d->xp.empty() && lb_ == 0 && le_ == g.n_layers && hand_in_ == nullptr &&
-                 warm_src_ != nullptr && staging_ != nullptr && warm_src_->pcie_layer(0) && lay.fmt[0].bytes % 16 == 0;
-    for (int64_t l = 1; stage && l < g.n_layers; ++l) stage = lay.fmt[(size_t) l].bytes == lay.fmt[0].bytes;
-    const int64_t blob = (int64_t) lay.fmt[0].bytes, stride = dec_moe_stage_stride(blob);
-    const int stage_slots =
-        (int) std::min<int64_t>(kDmStageMax, (int64_t) (kStagingBlobs * (int64_t) lay.max_blob) / stride);
-    if (stage && stage_slots >= 1) {
+                 warm_src_ != nullptr && staging_ != nullptr && pcie_staging_;
+    d->stage_on_l.assign((size_t) g.n_layers, 0);
+    d->stage_stride_l.assign((size_t) g.n_layers, 0);
+    if (stage) {
+        bool any = false;
+        for (int64_t l = 0; l < g.n_layers; ++l) {   // a layer stages when its blobs are 16-byte-sized and have a
+            const int64_t blob = (int64_t) lay.fmt[(size_t) l].bytes;   // mapped RAM copy the copy kernel can read
+            d->stage_stride_l[(size_t) l] = dec_moe_stage_stride(blob);
+            d->stage_on_l[(size_t) l] = (blob % 16 == 0 && warm_src_->pcie_layer(l)) ? 1 : 0;
+            any = any || d->stage_on_l[(size_t) l] != 0;
+        }
+        stage = any;
+    }
+    if (stage) {
         // per layer: the pool's experts after its doorbell, the staged ones after the copy, their own launches and
         // the combine's wait for them
         constexpr double kPoolBytesPerUs = 45e3, kLinkBytesPerUs = 18e3, kPoolFixUs = 15.0, kStageFixUs = 35.0;
-        const double cpu_us = (double) blob / kPoolBytesPerUs, link_us = (double) blob / kLinkBytesPerUs;
-        std::vector<int32_t> kt((size_t) kDmCap + 1, 0);
-        for (int m = 1; m <= kDmCap; ++m) {
-            double best = kPoolFixUs + m * cpu_us;
-            for (int k = 1; k <= std::min(m, stage_slots); ++k) {
-                const double t = std::max(kPoolFixUs + (m - k) * cpu_us, kStageFixUs + k * link_us);
-                if (t < best) { best = t; kt[(size_t) m] = k; }
+        const int64_t stage_arena = (int64_t) kStagingBlobs * (int64_t) lay.max_blob;
+        std::vector<int32_t> kt_all((size_t) g.n_layers * (size_t) (kDmCap + 1), 0);
+        d->stage_min = kDmCap;
+        for (int64_t l = 0; l < g.n_layers; ++l) {   // each layer's share is balanced on its own blob and slots
+            if (d->stage_on_l[(size_t) l] == 0) continue;
+            const int64_t blob = (int64_t) lay.fmt[(size_t) l].bytes;
+            const int stage_slots = (int) std::min<int64_t>(kDmStageMax, stage_arena / d->stage_stride_l[(size_t) l]);
+            const double cpu_us = (double) blob / kPoolBytesPerUs, link_us = (double) blob / kLinkBytesPerUs;
+            int32_t* tab = kt_all.data() + (size_t) l * (size_t) (kDmCap + 1);
+            for (int m = 1; m <= kDmCap; ++m) {
+                double best = kPoolFixUs + m * cpu_us;
+                for (int k = 1; k <= std::min(m, stage_slots); ++k) {
+                    const double t = std::max(kPoolFixUs + (m - k) * cpu_us, kStageFixUs + k * link_us);
+                    if (t < best) { best = t; tab[m] = k; }
+                }
             }
+            int first = 1;
+            while (first < kDmCap && tab[first] == 0) ++first;
+            if (first < d->stage_min) d->stage_min = first;
         }
         int st_least = 0, st_greatest = 0;   // the copy's blocks go first as the FFN read's leave the SMs
         bool sok = cudaMalloc((void**) &d->stage_src, (size_t) LE * 8) == cudaSuccess &&
                    cudaMemset(d->stage_src, 0, (size_t) LE * 8) == cudaSuccess &&
                    cudaMallocHost((void**) &d->stage_host, (size_t) LE * 8) == cudaSuccess &&
-                   cudaMalloc((void**) &d->stage_k, kt.size() * 4) == cudaSuccess &&
-                   cudaMemcpy(d->stage_k, kt.data(), kt.size() * 4, cudaMemcpyHostToDevice) == cudaSuccess &&
+                   cudaMalloc((void**) &d->stage_k, kt_all.size() * 4) == cudaSuccess &&
+                   cudaMemcpy(d->stage_k, kt_all.data(), kt_all.size() * 4, cudaMemcpyHostToDevice) == cudaSuccess &&
                    cudaDeviceGetStreamPriorityRange(&st_least, &st_greatest) == cudaSuccess &&
                    cudaStreamCreateWithPriority(&d->st_s, cudaStreamNonBlocking, st_greatest) == cudaSuccess &&
                    cudaEventCreateWithFlags(&d->st_fork, cudaEventDisableTiming) == cudaSuccess &&
                    cudaEventCreateWithFlags(&d->st_join, cudaEventDisableTiming) == cudaSuccess;
         if (!sok) { err = "verify: the staged share's buffers"; return false; }
         std::memset(d->stage_host, 0, (size_t) LE * 8);
-        d->stage_gen = warm_src_->places_generation() + 1;   // read at the first batch window
-        d->stage_stride = stride;
+        d->stage_gen = warm_src_->places_generation() + 1;   // read at the first window
         d->stage_blocks = 8;
-        d->stage_min = 1;
-        while (d->stage_min < kDmCap && kt[(size_t) d->stage_min] == 0) ++d->stage_min;
+        basalt::log::info("basalt verify", "decode windows: a layer with %d+ CPU misses sends a share of them over "
+                          "PCIe to CUDA0", d->stage_min);
     }
     std::string served;
     if (d->pdev >= 0) {

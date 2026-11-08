@@ -130,6 +130,10 @@ public:
     void set_route_tail_skip(int rank) { route_tail_skip_ = rank; }
     /// Residency-biased routing: see `kernels::route_prior_top10` (0 = off).
     void set_route_prior(float lambda) { route_prior_ = lambda; }
+    /// The device-planned MoE tail's staged share: a window's layer sends a share of its CPU misses over PCIe into
+    /// staging, computed on CUDA0, while the pool reads the rest (on unless switched off; see `kernels::dec_moe_stage`).
+    /// Before init; only with the device-planned MoE tail and a card without peers.
+    void set_pcie_staging(bool on) { pcie_staging_ = on; }
     /// What the routing changes did since the start, one line each; empty when none applied.
     std::vector<std::string> route_report() const;
 
@@ -647,6 +651,7 @@ private:
     GpuPlanSink sink_;
     int route_tail_skip_ = 0;
     float route_prior_ = 0.0f;
+    bool pcie_staging_ = true;   // the staged share of the device-planned MoE tail (--pcie-staging)
     uint32_t cur_layer_ = 0;
     static void publish_plan(void* ctx);
     void set_plan_slot();

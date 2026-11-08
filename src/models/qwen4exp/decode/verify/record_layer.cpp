@@ -326,9 +326,9 @@ bool Verifier::WindowRecorder::pre(int64_t l) {
         ra.stats = v_.dm_->wstat;
         ra.peer_cap = 0;
         ra.rows = v_.dm_->rq != nullptr || v_.dm_->warm != nullptr;
-        if (v_.dm_->stage_src != nullptr && v_.batch_rec_) {   // batch windows: many rows, many misses
+        if (v_.dm_->stage_src != nullptr && v_.dm_->stage_on_l[(size_t) l]) {   // the staged share, solo and batch windows alike
             ra.stage_src = v_.dm_->stage_src + l * g.n_expert;
-            ra.stage_k = v_.dm_->stage_k;
+            ra.stage_k = v_.dm_->stage_k + l * (kDmCap + 1);
         }
         PdlScope pr(false);   // after the router's kernel: a plain launch
         if (glue_on) {   // the ring's work inside post's gate/up launch, released by the read's counts
@@ -353,7 +353,7 @@ bool Verifier::WindowRecorder::pre(int64_t l) {
             cudaEventRecord(v_.dm_->st_fork, cs);
             cudaStreamWaitEvent(v_.dm_->st_s, v_.dm_->st_fork, 0);
             PdlScope pst(false);
-            dec_moe_stage(ra, v_.staging_, v_.dm_->stage_stride,
+            dec_moe_stage(ra, v_.staging_, v_.dm_->stage_stride_l[(size_t) l],
                           (int64_t) basalt::kernels::cpu::expert_layout().blob_bytes(l), v_.dm_->stage_blocks, v_.dm_->st_s);
             cudaEventRecord(v_.dm_->st_join, v_.dm_->st_s);
         }
