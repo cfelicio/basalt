@@ -1,5 +1,6 @@
 // src/kernels/cpu/iq_avx2.cpp - the i-quant expert rows in 256-bit lanes, several tokens at once (iq_avx2_rows.inc),
-// the activation quantizer, and the choice between this file's rows and the AVX-VNNI build of the same code.
+// the activation quantizer, and the choice between the builds of the same code: this file's base one, the AVX-VNNI
+// build (iq_avx2_vnni.cpp), and the BMI2 build (iq_avx2_bmi2.cpp) for CPUs without AVX-VNNI but with BMI2 in hardware.
 
 #include "basalt/kernels/cpu/iq_avx2.hpp"
 
@@ -19,6 +20,7 @@
 
 #define BASALT_IQ_VNNI 0
 #define BASALT_IQ_BMI2 0
+#define BASALT_IQ_IQ4NL 1
 #define BASALT_IQ_EXPORT(name) name##_base
 #include "iq_avx2_rows.inc"
 
@@ -80,14 +82,18 @@ bool iq256_supported(int type) noexcept {
 void iq256_gu_rows(int type, const uint8_t* blob, size_t gu_row, size_t up_off, int n, const void* const* act, int nt,
                    float* const* ff, int r0, int r1) {
     static const bool vnni = cpu_avxvnni_ok();
+    static const bool bmi2 = cpu_pdep_ok();
     if (vnni) iq256_gu_rows_vnni(type, blob, gu_row, up_off, n, act, nt, ff, r0, r1);
+    else if (bmi2) iq256_gu_rows_bmi2(type, blob, gu_row, up_off, n, act, nt, ff, r0, r1);
     else iq256_gu_rows_base(type, blob, gu_row, up_off, n, act, nt, ff, r0, r1);
 }
 
 void iq256_rows(int type, const uint8_t* w, size_t row_bytes, int n, const void* const* act, int nt, float* const* out,
                 int r0, int r1) {
     static const bool vnni = cpu_avxvnni_ok();
+    static const bool bmi2 = cpu_pdep_ok();
     if (vnni) iq256_rows_vnni(type, w, row_bytes, n, act, nt, out, r0, r1);
+    else if (bmi2) iq256_rows_bmi2(type, w, row_bytes, n, act, nt, out, r0, r1);
     else iq256_rows_base(type, w, row_bytes, n, act, nt, out, r0, r1);
 }
 

@@ -1,15 +1,16 @@
-// tests/kernels/cpu/iq_avx2_test.cpp - the AVX2 i-quant and Q2_0 rows: the `madd`+`add` build against the AVX-VNNI build,
-// and both against a plain double-precision reference.
+// tests/kernels/cpu/iq_avx2_test.cpp - the AVX2 i-quant and Q2_0 rows: the `madd`+`add` build against the AVX-VNNI build
+// and the BMI2 build, and all of them against a plain double-precision reference.
 //
 //     build/iq_avx2_test [--bench]
 //
-// The two builds must agree to the bit (the VNNI instructions are the same arithmetic in one step): gate/up rows of
+// The builds must agree to the bit (BMI2 builds the same sign bytes and grid indices the tables do, and the VNNI
+// instructions are the same arithmetic in one step): gate/up rows of
 // IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S and IQ4_XS, the plain dot rows, and the IQ4_NL and Q2_0 down rows, on random
 // weights and activations with the model's row geometry, 1 to 8 tokens, plus weights and activations pinned to their
 // extreme codes.  The down rows must also not depend on the number of tokens in a call or on the row range.
 // The reference dequantizes the weights and the activation and sums in double; its error is reported (the float order of
-// the kernels differs from it by rounding only). On a CPU without AVX-VNNI the base build is checked against the
-// reference alone. Every build's gate/up and dot rows must also hash to the values frozen from the kernels (the decode
+// the kernels differs from it by rounding only). On a CPU without AVX-VNNI or fast BMI2 the base build is checked against
+// the reference alone. Every build's gate/up and dot rows must also hash to the values frozen from the kernels (the decode
 // may change, the bits may not), on a fixture made from the raw generator output only, so it is the same on every
 // standard library. The AVX-512 quantizer must match to the bit and its Q2_0 rows to rounding, where the CPU has them. A token's rows must not depend on how many tokens share the call. `--print` prints the hashes,
 // `--bench` one row range per format on each build.
@@ -175,8 +176,10 @@ int main(int argc, char** argv) {
         return 0;
     }
     const bool vnni = cpu::cpu_avxvnni_ok();
+    const bool bmi2 = cpu::cpu_pdep_ok();
     const bool avx512 = cpu::cpu_avx512_ok();
-    std::printf("iq_avx2_test: %s, AVX-VNNI %s\n", cpu::cpu_name().c_str(), vnni ? "yes" : "no (base build only)");
+    std::printf("iq_avx2_test: %s, AVX-VNNI %s, BMI2 %s\n", cpu::cpu_name().c_str(), vnni ? "yes" : "no",
+                bmi2 ? "yes (pdep)" : "no (tables and scalar index arithmetic)");
     int bad = 0, compared = 0;
     std::mt19937 rng(11);
     std::normal_distribution<float> nd(0.f, 1.f);
@@ -184,6 +187,7 @@ int main(int argc, char** argv) {
     // ---- gate/up and plain dot rows against the frozen hashes
     bad += frozen_rows("base", cpu::iq256_gu_rows_base, cpu::iq256_rows_base, print);
     if (vnni) bad += frozen_rows("vnni", cpu::iq256_gu_rows_vnni, cpu::iq256_rows_vnni, false);
+    if (bmi2) bad += frozen_rows("bmi2", cpu::iq256_gu_rows_bmi2, cpu::iq256_rows_bmi2, false);
 
     // ---- gate/up and plain dot rows (Q8_K activations)
     for (int type : {16, 17, 18, 21, 22, 23}) {
@@ -191,7 +195,7 @@ int main(int argc, char** argv) {
         std::string err;
         if (!cpu::native_fmt(type, 20, H, FF, f, err)) { std::printf("native_fmt(%d): %s\n", type, err.c_str()); return 1; }
         const ggml_type_traits* tr = ggml_get_type_traits((ggml_type) type);
-        Stats st_base, st_vnni;
+        Stats st_base, st_vnni, st_bmi2;
         for (int mode = 0; mode < 3; ++mode) {   // random, extreme codes, random weights with saturating activations
             std::vector<uint8_t> blob(2 * f.up_off);
             fill(blob, type, 100 + (uint64_t) type * 7 + (uint64_t) mode, mode == 1 ? 1 : 0);
@@ -207,22 +211,31 @@ int main(int argc, char** argv) {
                 const void* ap[MAXT];
                 for (int t = 0; t < nt; ++t) ap[t] = act[(size_t) t].data();
                 std::vector<std::vector<float>> ff_b(nt, std::vector<float>(FF)), ff_v(nt, std::vector<float>(FF)),
-                    d_b(nt, std::vector<float>(FF)), d_v(nt, std::vector<float>(FF));
-                float *fb[MAXT], *fv[MAXT], *db[MAXT], *dv[MAXT];
-                for (int t = 0; t < nt; ++t) { fb[t] = ff_b[(size_t) t].data(); fv[t] = ff_v[(size_t) t].data(); db[t] = d_b[(size_t) t].data(); dv[t] = d_v[(size_t) t].data(); }
+                    ff_p(nt, std::vector<float>(FF)), d_b(nt, std::vector<float>(FF)), d_v(nt, std::vector<float>(FF)),
+                    d_p(nt, std::vector<float>(FF));
+                float *fb[MAXT], *fv[MAXT], *fp[MAXT], *db[MAXT], *dv[MAXT], *dp[MAXT];
+                for (int t = 0; t < nt; ++t) { fb[t] = ff_b[(size_t) t].data(); fv[t] = ff_v[(size_t) t].data(); fp[t] = ff_p[(size_t) t].data(); db[t] = d_b[(size_t) t].data(); dv[t] = d_v[(size_t) t].data(); dp[t] = d_p[(size_t) t].data(); }
                 cpu::iq256_gu_rows_base(type, blob.data(), f.gu_row, f.up_off, H, ap, nt, fb, 0, FF);
                 cpu::iq256_rows_base(type, blob.data(), f.gu_row, H, ap, nt, db, 0, FF);
-                if (vnni) {
-                    cpu::iq256_gu_rows_vnni(type, blob.data(), f.gu_row, f.up_off, H, ap, nt, fv, 0, FF);
-                    cpu::iq256_rows_vnni(type, blob.data(), f.gu_row, H, ap, nt, dv, 0, FF);
+                // another build of the same arithmetic: run it and compare every token's rows to the base bits
+                auto against_base = [&](const char* name,
+                                        void (*gu)(int, const uint8_t*, size_t, size_t, int, const void* const*, int,
+                                                  float* const*, int, int),
+                                        void (*dot)(int, const uint8_t*, size_t, int, const void* const*, int,
+                                                    float* const*, int, int),
+                                        float* const* pf, float* const* pd) {
+                    gu(type, blob.data(), f.gu_row, f.up_off, H, ap, nt, pf, 0, FF);
+                    dot(type, blob.data(), f.gu_row, H, ap, nt, pd, 0, FF);
                     for (int t = 0; t < nt; ++t) {
                         ++compared;
-                        if (std::memcmp(fb[t], fv[t], FF * 4) || std::memcmp(db[t], dv[t], FF * 4)) {
-                            std::printf("MISMATCH type %d nt %d mode %d token %d\n", type, nt, mode, t);
+                        if (std::memcmp(fb[t], pf[t], FF * 4) || std::memcmp(db[t], pd[t], FF * 4)) {
+                            std::printf("MISMATCH %s type %d nt %d mode %d token %d\n", name, type, nt, mode, t);
                             ++bad;
                         }
                     }
-                }
+                };
+                if (vnni) against_base("vnni", cpu::iq256_gu_rows_vnni, cpu::iq256_rows_vnni, fv, dv);
+                if (bmi2) against_base("bmi2", cpu::iq256_gu_rows_bmi2, cpu::iq256_rows_bmi2, fp, dp);
                 // reference on a few rows of the dot output
                 std::vector<float> wrow(H);
                 for (int r : {0, 1, 97, FF - 1}) {
@@ -232,12 +245,14 @@ int main(int argc, char** argv) {
                         for (int i = 0; i < H; ++i) want += (double) wrow[(size_t) i] * (double) actf[(size_t) t][(size_t) i];
                         st_base.add(db[t][r], want);
                         if (vnni) st_vnni.add(dv[t][r], want);
+                        if (bmi2) st_bmi2.add(dp[t][r], want);
                     }
                 }
             }
         }
-        std::printf("  type %2d rows: vs double reference: max abs %.3g rel %.3g (base)%s\n", type, st_base.max_abs, st_base.max_rel,
-                    vnni ? (std::string("; vnni ") + std::to_string(st_vnni.max_abs) + " / " + std::to_string(st_vnni.max_rel)).c_str() : "");
+        std::printf("  type %2d rows: vs double reference: max abs %.3g rel %.3g (base)%s%s\n", type, st_base.max_abs, st_base.max_rel,
+                    vnni ? (std::string("; vnni ") + std::to_string(st_vnni.max_abs) + " / " + std::to_string(st_vnni.max_rel)).c_str() : "",
+                    bmi2 ? (std::string("; bmi2 ") + std::to_string(st_bmi2.max_abs) + " / " + std::to_string(st_bmi2.max_rel)).c_str() : "");
         if (st_base.max_rel > 1e-3) { std::printf("REFERENCE ERROR too large for type %d\n", type); ++bad; }
     }
 
@@ -432,7 +447,7 @@ int main(int argc, char** argv) {
         std::printf("  Q8_0 down activations: %d codes -128, %d of them in a block with a nonzero scale\n", codes128, scaled128);
         if (scaled128 != 0) { std::printf("QUANTIZER wrote -128 in a block with a nonzero scale\n"); ++bad; }
     }
-    std::printf("iq_avx2_test: %d base/vnni comparisons, %d failures\n", compared, bad);
+    std::printf("iq_avx2_test: %d build comparisons, %d failures\n", compared, bad);
 
     // ---- Q2_0 down rows (the pool's ActQ activations): 64-value blocks of 18 bytes, value i in byte i/4 bits 2*(i%4)
     {
@@ -540,10 +555,10 @@ int main(int argc, char** argv) {
             if (st512.max_rel > 1e-3) { std::printf("AVX-512 Q2_0 down rows too far from AVX2\n"); ++bad; }
         }
     }
-    std::printf("iq_avx2_test: %d base/vnni comparisons, %d failures\n", compared, bad);
+    std::printf("iq_avx2_test: %d build comparisons, %d failures\n", compared, bad);
 
     if (bench) {   // 200 gate/up rows (the pool's task) per call, the arena far larger than the caches
-        for (int type : {22, 18, 21}) {
+        for (int type : {22, 18, 21, 16, 17}) {   // 16 and 17: the formats whose signs the BMI2 build rebuilds
             cpu::NativeFmt f;
             std::string err;
             cpu::native_fmt(type, 20, H, FF, f, err);
@@ -559,13 +574,20 @@ int main(int argc, char** argv) {
                 std::vector<std::vector<float>> ff(nt, std::vector<float>(FF));
                 float* fp[MAXT];
                 for (int t = 0; t < nt; ++t) fp[t] = ff[(size_t) t].data();
-                for (int v = 0; v < (vnni ? 2 : 1); ++v) {
-                    auto fn = v ? cpu::iq256_gu_rows_vnni : cpu::iq256_gu_rows_base;
+                struct { const char* name;
+                         void (*fn)(int, const uint8_t*, size_t, size_t, int, const void* const*, int, float* const*,
+                                    int, int); } builds[3];
+                int nbuilds = 0;
+                builds[nbuilds++] = {"base", cpu::iq256_gu_rows_base};
+                if (vnni) builds[nbuilds++] = {"vnni", cpu::iq256_gu_rows_vnni};
+                if (bmi2) builds[nbuilds++] = {"bmi2", cpu::iq256_gu_rows_bmi2};
+                for (int b = 0; b < nbuilds; ++b) {
+                    auto fn = builds[b].fn;
                     const int reps = 400;
                     const double t0 = now_ms();
                     for (int r = 0; r < reps; ++r) fn(type, blob.data(), f.gu_row, f.up_off, H, ap, nt, fp, 0, 200);
                     const double ms = now_ms() - t0;
-                    std::printf("  type %2d nt %d %s: %.2f GB/s (in cache, one thread)\n", type, nt, v ? "vnni" : "base",
+                    std::printf("  type %2d nt %d %s: %.2f GB/s (in cache, one thread)\n", type, nt, builds[b].name,
                                 (double) reps * 400.0 * (double) f.gu_row / (ms * 1e6));
                 }
             }
