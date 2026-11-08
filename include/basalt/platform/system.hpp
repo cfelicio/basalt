@@ -19,9 +19,9 @@ int64_t process_id();
 /// Windows subsystem.
 std::string host_os_name();
 
-/// The Python the server runs under: the virtual environment in `src_dir` when it has one, else the interpreter name
+/// The Python the server runs under: the virtual environment in `root` (`install_root()`) when it has one, else the interpreter name
 /// the platform puts on PATH.
-std::string python_interpreter(const std::string& src_dir);
+std::string python_interpreter(const std::string& root);
 
 /// The tree the engine reads `serve/` and `data/` from. An installed engine carries those folders beside its
 /// binaries, so the tree is the folder holding `serve/server.py` found by walking up from the folder of `exe_path`

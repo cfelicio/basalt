@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES 120 CACHE STRING "CUDA architectures" FORCE)
 endif()
-project(basalt VERSION 0.3.1 LANGUAGES C CXX CUDA)
+project(basalt VERSION 0.3.2 LANGUAGES C CXX CUDA)
 add_compile_definitions(BASALT_VERSION="${PROJECT_VERSION}")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -179,7 +179,6 @@ add_library(model_qwen4exp STATIC src/models/qwen4exp/adapter.cpp src/models/qwe
   src/models/qwen4exp/cli/control_vectors.cpp
   src/models/qwen4exp/cli/report.cpp
   src/models/qwen4exp/load/qfn_run.cpp)
-target_compile_definitions(model_qwen4exp PRIVATE BASALT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_include_directories(model_qwen4exp PRIVATE ${_gpu_include_directories})
 target_include_directories(model_qwen4exp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/program/tokenizer)
 target_link_libraries(model_qwen4exp PUBLIC model tokenizer serve_shared model_qwen4exp_engine engine_session grammar tokenizer model_qwen4exp_prefill spec models ${_gpu_runtime_target})
@@ -511,8 +510,7 @@ set_target_properties(basalt PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_
 target_include_directories(basalt PRIVATE ${_gpu_include_directories})
 target_link_libraries(basalt PRIVATE models serve_shared engine_session ${_gpu_runtime_target})
 basalt_embed_manifest(basalt)
-# `basalt serve` runs the Python server from the source tree; the engine reads its expert profiles from data/profiles
-target_compile_definitions(basalt PRIVATE BASALT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# `basalt serve` runs the Python server from the directory above bin/; the engine reads its expert profiles from data/profiles
 
 # The standard benchmark: a host-only program that drives the engine over its stdin/stdout protocol.
 # The commit stamp is refreshed on every build (not only at configure time), by a target that rewrites the header
@@ -1176,6 +1174,10 @@ endif()
 add_executable(ram_load_test tests/core/ram_load_test.cpp)
 target_link_libraries(ram_load_test PRIVATE core ${_gpu_runtime_target})
 basalt_cpu_test(NAME ram_load_test COMMAND ram_load_test)
+add_executable(shipped_profiles_test tests/core/shipped_profiles_test.cpp)
+target_link_libraries(shipped_profiles_test PRIVATE platform)
+target_include_directories(shipped_profiles_test PRIVATE include)
+basalt_cpu_test(NAME shipped_profiles_test COMMAND shipped_profiles_test)
 
 # the n-gram table read straight from the SSD. The selftest needs only the CPU and a temp file.
 add_executable(ple_reader_test tests/ngram/ple_reader_test.cpp)

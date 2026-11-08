@@ -1,6 +1,7 @@
 // The whole start of a Flash-Next engine, in order: its stack frames hold the resources while the server runs.
+#include "basalt/core/shipped_profiles.hpp"
 #include "basalt/models/qwen4exp/shared_names.hpp"
-#include "basalt/platform/system.hpp"
+#include "basalt/platform/file.hpp"
 #include "context.hpp"
 #include "../../../program/generate/run.hpp"
 #include "models/qwen4exp/adapter.hpp"
@@ -35,10 +36,9 @@ int run_engine(Options& o, std::vector<program::GpuCard>& chosen_cards) {
             }
         } else {
             const std::string key = cli::profile_key(model_file.meta());
-            // the profiles travel with the engine: the installed tree beside this binary, else the tree built in
-            const std::string prof =
-                basalt::platform::tree_root(basalt::platform::module_path(), BASALT_SOURCE_DIR) + "/data/profiles/" +
-                key + ".prof";
+            const std::string miss = basalt::core::missing_shipped_profile(basalt::platform::install_root() + "/data/profiles", cli::shipped_profiles(key));
+            if (!miss.empty()) return fatal_start_error(miss);
+            const std::string prof = basalt::platform::install_root() + "/data/profiles/" + key + ".prof";
             if (!key.empty() && basalt::platform::file_size(prof, prof_bytes) && prof_bytes > 0) o.expert_profile = prof;
             else {
                 basalt::log::info("basalt generate", "no expert profile for %s", key.empty() ? "this model" : key.c_str());
