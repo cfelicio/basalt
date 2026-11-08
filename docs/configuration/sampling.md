@@ -14,6 +14,7 @@ default, then the engine's. `/props` reports what is in effect. An out-of-range 
 | `penalty_last_n` | 0..4096 | Window for the penalties (default 64). |
 | `seed` | integer | Fixes the draw for a reproducible sampled reply. |
 | `relaxed_drafting` | [0, 1] or `false` | This request's relaxed-drafting threshold. `false` or `0` forces exact sampling. |
+| `route_bias` | [0, 16] or `false` | This request's `--route-bias`, the residency bias on DeepSeek-V4.1 decode routing. `false` or `0` forces the exact routing. |
 
 Also read: `max_tokens` / `max_completion_tokens` (`0` or `-1` = the rest of the context), `stop`, `logit_bias`, `reasoning_effort`,
 `enable_thinking`, `reasoning_budget_tokens` (`0` = no thinking budget). Anthropic's `thinking.budget_tokens` is the same budget.

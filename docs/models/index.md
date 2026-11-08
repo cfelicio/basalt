@@ -17,7 +17,7 @@ switch. Several models can share one address ([router](../configuration/models.m
 | Cards | main card plus up to three expert-tier cards | main card plus one expert-tier card |
 | Layer split | yes, matched cards, priced at start | no |
 | Parallel slots | yes; each slot drafts | yes; each slot drafts |
-| Lossy flags | `--relaxed-drafting`, `--route-prior`, `--route-tail-skip` (off) | none |
+| Lossy flags | `--relaxed-drafting`, `--route-prior`, `--route-tail-skip` (off) | `--route-bias` (off) |
 | Prompt skip | no | yes (`--no-prompt-skip` turns it off) |
 | Idle sleep, wake | yes (Linux) | yes (Linux); a second-card sleep may be refused |
 | `basalt-bench --quality` | yes | yes, one row per window |

@@ -95,6 +95,7 @@ struct LoadRequest {
     int draft_experts = 32;           ///< the drafter's routed experts each stage keeps (0: all)
     bool diag_tier_frozen = false;    ///< diagnostic: the VRAM tier keeps what it holds, no bus copy and no promotion
     std::string kv;                   ///< --kv: the KV storage as the model names it, checked by its flags (empty: default)
+    float route_bias = 0.0f;          ///< --route-bias: the decode routing's held-expert score bias (0: off)
 };
 
 struct DecodeRequest {
@@ -109,6 +110,9 @@ struct DecodeRequest {
     const kernels::SamplerParams* sampling = nullptr;   ///< how next_token is drawn (null: greedy)
     const int32_t* history = nullptr; ///< per row, the last `history_len` tokens the pick follows (host), for the penalties
     int history_len = 0;
+    /// This window's residency bias on decode routing (the model's `--route-bias` knob; -1: the engine's value,
+    /// 0: the exact router; models that take no such flag ignore it).
+    float route_bias = -1.0f;
 };
 
 struct PrefillRequest {

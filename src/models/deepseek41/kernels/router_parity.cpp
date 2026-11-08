@@ -137,6 +137,73 @@ int main(int argc, char** argv) {
         v.expect(o.ids[0] == 77 && o.ids[1] == 201, "tie did not resolve to the lower index first");
     }
 
+    // ---- held-bias table: its entry joins the selection score, the weights stay the unbiased s of those picked,
+    // and a table of zeros routes bitwise as no table at all
+    {
+        const float lb = 1.5f;
+        std::vector<float> held(NE, 0.f);
+        for (int e = 0; e < NE; ++e)
+            if ((e * 7919) % 29 < 13) held[e] = lb;   // a fixed ~45% of the experts
+        held[77] = held[201] = lb;                    // the twin pair, both held
+        Dev<float> zero_h(std::vector<float>(NE, 0.f)), held_d(held);
+        RouterArgs az = a, ab = a;
+        az.held_bias = zero_h.p;
+        ab.held_bias = held_d.p;
+        Out z = run(gate, bias, x_h, Tmax, az);
+        bool zero_bitwise = true;
+        for (int t = 0; t < Tmax; ++t) {
+            zero_bitwise = zero_bitwise && !std::memcmp(&z.ids[(size_t) t * K], &all.ids[(size_t) t * K], K * 4);
+            zero_bitwise = zero_bitwise && !std::memcmp(&z.w[(size_t) t * K], &all.w[(size_t) t * K], K * 4);
+        }
+        std::printf("held bias: zero table bitwise as none: %s\n", zero_bitwise ? "yes" : "NO");
+        v.expect(zero_bitwise, "a zero held-bias table changed the routing");
+        Out o = run(gate, bias, x_h, Tmax, ab);
+        // the CPU rule: rank by s + bias + the held entry (lower index wins ties), then the unbiased weights
+        int moved = 0, mismatch = 0, near = 0;
+        double worst_uw = 0;
+        for (int t = 0; t < Tmax; ++t) {
+            const float* x = &x_h[(size_t) t * ND];
+            std::vector<double> s(NE), sc(NE);
+            for (int e = 0; e < NE; ++e) {
+                double acc = 0;
+                for (int d = 0; d < ND; ++d) acc += (double) gate_h[(size_t) e * ND + d] * (double) x[d];
+                s[e] = std::sqrt(std::log1p(std::exp(acc)));
+                sc[e] = s[e] + (double) bias_h[e] + held[e];
+            }
+            std::vector<int> idx(NE);
+            std::iota(idx.begin(), idx.end(), 0);
+            std::stable_sort(idx.begin(), idx.end(), [&](int e1, int e2) { return sc[e1] > sc[e2]; });
+            bool same = true;
+            for (int k = 0; k < K; ++k) same = same && o.ids[(size_t) t * K + k] == idx[k];
+            if (same) {
+                for (int k = 0; k < K; ++k)
+                    if (o.ids[(size_t) t * K + k] != all.ids[(size_t) t * K + k]) { ++moved; break; }
+            } else {
+                ++mismatch;
+                std::vector<double> gap;
+                for (int k = 0; k < K; ++k) {
+                    const int g = o.ids[(size_t) t * K + k];
+                    if (std::find(idx.begin(), idx.begin() + K, g) == idx.begin() + K) gap.push_back(std::fabs(sc[g] - sc[idx[K - 1]]));
+                }
+                bool tie = true;
+                for (double g : gap) tie = tie && g < 1e-5;
+                if (tie) ++near;
+            }
+            double sum = 0;
+            for (int k = 0; k < K; ++k) sum += s[o.ids[(size_t) t * K + k]];
+            for (int k = 0; k < K; ++k) {
+                const double w = s[o.ids[(size_t) t * K + k]] / (sum + 1e-20) * (double) a.weight_scale;
+                worst_uw = std::max(worst_uw, std::fabs((double) o.w[(size_t) t * K + k] - w) / w);
+            }
+        }
+        std::printf("held bias lam=%.1f: %d/%d tokens routed differently than plain; id differences %d (near-ties %d); "
+                    "weights vs the unbiased s max rel %.3g\n",
+                    lb, moved, Tmax, mismatch, near, worst_uw);
+        v.expect(mismatch == near, "held-bias ids differ beyond near-ties");
+        v.expect(worst_uw < 1e-4, "held-bias weights are not the unbiased s of those picked");
+        v.expect(moved > 0, "the held-bias table moved nobody (a table the kernel ignored?)");
+    }
+
     // ---- frozen: the ids and weights of many tokens hash to the bits of the kernel the selection replaced, here and
     // with every expert twinned (ties everywhere)
     {

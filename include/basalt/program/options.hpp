@@ -86,6 +86,7 @@ struct CommonOptions {
     bool spec_given = false;           ///< --spec on the command line
     std::string spec_oracle;
     int draft_experts = 32;            ///< --draft-experts N: the drafter's routed experts each stage keeps (0: all)
+    float route_bias = 0.0f;           ///< --route-bias LAMBDA: decode routing favours the held experts (0: off)
     int drafter_device = -1;           ///< --diag-drafter-gpu N: the CUDA device it runs on (-1: the main card)
     bool diag_teacher = false;         ///< --diag-teacher: --spec-oracle's tokens go on whatever the picks
     bool diag_tier_frozen = false;     ///< --diag-tier-frozen: the VRAM tier keeps what it holds

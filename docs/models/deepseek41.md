@@ -80,8 +80,14 @@ alone in its slot gives the same greedy tokens as with `--parallel 1` (tiers pin
 
 ## Lossy flags
 
-None. Output depends on which experts are resident, so a different RAM tier size can change the text
-([precision](../precision/deepseek41.md#experts-and-placement)).
+Even without any of these, output depends on which experts are resident, so a different RAM tier size can change the
+text ([precision](../precision/deepseek41.md#experts-and-placement)).
+
+- **`--route-bias [LAMBDA]`** (bare 0.5, pass 0 to switch off): a decode step picks its routed experts as if each one a
+  card's GPU holds had LAMBDA added to its selection score; the weights stay the router's unbiased ones. Routing tilts
+  toward residency - more held hits and less decode-time bus staging, further from the plain router. Only the decode
+  selection is biased; prompt and drafter routing stay exact, and the router's own learned bias is untouched. A start
+  with it on prints a warning; `--serve` requests can set their own (`route_bias=LAMBDA`). Default off (exact).
 
 ## Limits
 

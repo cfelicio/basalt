@@ -87,8 +87,16 @@ public:
     uint64_t free_floor() const { return free_floor_; }
 
     /// Called before each token or window: the promotions queued during the previous one finish and become resident, so
-    /// what a lookup finds depends only on the routing history.
+    /// what a lookup finds depends only on the routing history. With a route bias set, this is also when the held-expert
+    /// table (below) is rebuilt from the residency as it stands for the window about to run.
     void begin_token(int n_tokens = 1);
+    /// The --route-bias value the held table is built with (0: the table stays all zero, the exact router).
+    void set_route_bias(float lambda) { route_bias_ = lambda; }
+    /// [layer * n_expert + e] the lambda held experts' entries carry, pinned, zero elsewhere: a decode step copies it
+    /// to the device and hands each layer's row to the router, which adds an entry to that expert's selection score.
+    /// Slots share the tier: with different biases running at once, the marks stay the tier's own residency and the
+    /// lambda is the last step's.
+    const float* held_bias() const { return held_bias_h_; }
     /// Looks up `ids[0..k)` of `layer` and stamps them as used.
     bool lookup(int layer, const int32_t* ids, int k, Lookup& lk, std::string& err);
     /// The CPU's share: the experts of `lk` without a device blob, over the activation `x` (n_embd floats, host).
@@ -199,6 +207,8 @@ private:
     void finish_swaps();
     void start_swaps();
     void swap_worker();
+    /// Refills `held_bias_h_` from `res_` and `peer_owner_`: the two cards' residency, scaled by `route_bias_`.
+    void rebuild_held();
     /// Copies (layer, e) from `src` into the least recently used free slot of the layer; the slot, or -1. With `homes_too`
     /// that slot may be a home's, when the layer has a free RAM place for it. `whole`: one copy, for a layer that waits
     /// on it; else pieces, which let a waited copy pass. With `later` the pieces wait in the queue for pump.
@@ -219,6 +229,9 @@ private:
     bool unread_said_ = false;              ///< `grow` has said that the runtime could not answer
     int64_t lent_per_layer_ = 0;            ///< base slots given up by lend_all(), 0 when none
     std::vector<int32_t> res_;              ///< [layer * n_expert + e] VRAM slot or -1
+    float* held_bias_h_ = nullptr;          ///< [layer * n_expert + e] pinned, held experts: the route bias, else 0
+    float route_bias_ = 0.f;                ///< --route-bias for the windows to come (0: off)
+    bool held_dirty_ = false;               ///< the held table may hold non-zero from a bias since switched off
     std::vector<uint64_t> stamp_;           ///< [layer * n_expert + e] last use
     std::vector<int32_t> owner_;            ///< [slot] expert it holds or is receiving, or -1
     std::vector<uint8_t> busy_;             ///< [slot] a promotion is copying into it

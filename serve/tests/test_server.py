@@ -1093,6 +1093,11 @@ class SamplingKeys(unittest.TestCase):
         self.assertIn("relax=0", self.keys(temperature=1.0, relaxed_drafting=False))
         self.assertIn("relax=0.0", self.keys(temperature=1.0, relaxed_drafting=0))
 
+    def test_route_bias(self):
+        self.assertIn("route_bias=1.5", self.keys(temperature=1.0, route_bias=1.5))
+        self.assertIn("route_bias=0", self.keys(temperature=1.0, route_bias=False))
+        self.assertIn("route_bias=0.0", self.keys(temperature=1.0, route_bias=0))
+
     def test_penalty_window(self):
         self.assertIn("penalty_last_n=64", self.keys(presence_penalty=1.5))
         self.assertIn("penalty_last_n=4096", self.keys(repetition_penalty=1.1, penalty_last_n=4096))
@@ -1107,14 +1112,14 @@ class SamplingChecked(unittest.TestCase):
         from serve.config import checked_sampling
         good = {"temperature": 0, "top_p": 1, "top_k": 0, "min_p": 1, "presence_penalty": -1.5,
                 "frequency_penalty": 2, "repetition_penalty": 1.1, "penalty_last_n": 4096, "seed": 0,
-                "relaxed_drafting": False}
+                "relaxed_drafting": False, "route_bias": False}
         checked_sampling(good)
         checked_sampling({"top_k": -1, "seed": -7, "top_k_unknown": "x", "temperature": None})
         bad = [("temperature", -0.1), ("temperature", float("nan")), ("temperature", "0.7"), ("top_p", 0),
                ("top_p", 1.5), ("top_k", -2), ("top_k", 2.5), ("top_k", True), ("min_p", 1.5),
                ("repetition_penalty", 0), ("presence_penalty", float("inf")), ("penalty_last_n", 4097),
                ("penalty_last_n", -1), ("seed", 1.5), ("seed", 2 ** 64), ("relaxed_drafting", 1.5),
-               ("relaxed_drafting", True)]
+               ("relaxed_drafting", True), ("route_bias", 16.5), ("route_bias", True), ("route_bias", -0.1)]
         for key, value in bad:
             with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, f"^{key}: expected"):
                 checked_sampling({key: value})

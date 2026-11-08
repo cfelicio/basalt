@@ -67,6 +67,7 @@ ExpertTier::~ExpertTier() {
         platform::free_aligned(ram_[l]);
     }
     platform::free_aligned(act_);
+    if (held_bias_h_) cudaFreeHost(held_bias_h_);
 }
 
 bool ExpertTier::open(const Reserve& reserve, float* h_rows, std::string& err) {
@@ -180,6 +181,12 @@ bool ExpertTier::open(const Reserve& reserve, float* h_rows, std::string& err) {
     stamp_.assign((size_t) n_layers_ * n_expert_, 0);
     owner_.assign(slot_bytes.size(), -1);
     busy_.assign(slot_bytes.size(), 0);
+    // the --route-bias held table: pinned, so a decode step can copy it to the device as it starts
+    if (cudaHostAlloc((void**) &held_bias_h_, (size_t) n_layers_ * n_expert_ * sizeof(float), cudaHostAllocPortable) != cudaSuccess) {
+        err = "deepseek41: cannot allocate the route-bias table";
+        return false;
+    }
+    std::memset(held_bias_h_, 0, (size_t) n_layers_ * n_expert_ * sizeof(float));
     int lo_prio = 0, hi_prio = 0;
     cudaDeviceGetStreamPriorityRange(&lo_prio, &hi_prio);
     if (cudaEventCreateWithFlags(&fetch_ev_, cudaEventDisableTiming) != cudaSuccess ||
@@ -572,6 +579,21 @@ void ExpertTier::begin_token(int n_tokens) {
     drain();
     finish_swaps();
     start_swaps();
+    if (route_bias_ > 0.f || held_dirty_) rebuild_held();
+}
+
+void ExpertTier::rebuild_held() {
+    const size_t total = (size_t) n_layers_ * n_expert_;
+    std::memset(held_bias_h_, 0, total * sizeof(float));
+    if (route_bias_ > 0.f) {
+        for (size_t i = 0; i < total; ++i)
+            if (res_[i] >= 0) held_bias_h_[i] = route_bias_;
+        if (peer_)
+            for (size_t s = 0; s < peer_owner_.size(); ++s)
+                if (peer_owner_[s] >= 0)
+                    held_bias_h_[(s / (size_t) homes_.peer) * (size_t) n_expert_ + peer_owner_[s]] = route_bias_;
+    }
+    held_dirty_ = route_bias_ > 0.f;
 }
 
 void ExpertTier::swap_worker() {

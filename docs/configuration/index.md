@@ -142,6 +142,7 @@ Unless `relaxed-drafting` is on, output is exactly plain decoding's.
 | `relaxed-drafting` | engine (`[P]`) | `true` or 0 to 1 | off | Flash-Next only. **Changes output.** Under sampling, keeps a draft the model gives probability P or more. Greedy, `logit_bias`, JSON and tool calls stay exact. [precision](../precision/qwen38-flash-next.md#relaxed-drafting) |
 | `route-tail-skip` | engine (`[R]`) | `true` or 1 to 9 | off | Flash-Next only. **Changes output.** Skips experts no GPU holds when they rank R or lower in every window entry. Needs the device MoE tail. [precision](../precision/qwen38-flash-next.md#lossy-routing-flags) |
 | `route-prior` | engine (`[LAMBDA]`) | `true` or 0 to 16 | off | Flash-Next only. **Changes output.** Adds LAMBDA to held experts' router logits. Needs the device MoE tail. [precision](../precision/qwen38-flash-next.md#lossy-routing-flags) |
+| `route-bias` | engine (`[LAMBDA]`) | `true` or 0 to 16 | off | DeepSeek-V4.1 only. **Changes output.** Adds LAMBDA to the selection score of the experts a card holds; the weights stay the router's. A request can set its own (`route_bias=LAMBDA`). [guide](../models/deepseek41.md#lossy-flags) |
 
 ## Parallel slots
 

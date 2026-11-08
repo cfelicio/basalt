@@ -674,6 +674,13 @@ class ProcessEngine:
             keys += " relax=0"
         elif _number(rd):
             keys += f" relax={float(rd)!r}"
+        # route_bias: this request's --route-bias, the residency bias on decode routing (0 or false for exact routing;
+        # ignored by engines without it)
+        rb = sampling.get("route_bias")
+        if rb is False:
+            keys += " route_bias=0"
+        elif _number(rb):
+            keys += f" route_bias={float(rb)!r}"
         return keys + ProcessEngine.projection_key(sampling) + bias_key(sampling.get(BIAS_KEY)) \
             + grammar_key(sampling.get(GRAMMAR_KEY))
 

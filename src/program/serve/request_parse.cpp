@@ -33,6 +33,7 @@ Flow Request::parse() {
     req_gprompt = -1;       // gprompt=N: the first N ids are the prompt, the rest tokens the request has already generated
     req_cvec = 1;   // cvec=0|1: a loaded control vector for this request (on when absent)
     req_relax = default_relax();   // relax=P: this request's --relaxed-drafting (0 = exact)
+    req_route_bias = default_route_bias();   // route_bias=L: this request's --route-bias (0 = exact routing)
     // ppl=K [ppl_t=T]: quality gate (basalt/program/ppl_gate.hpp) - chunk K of --ppl-base, the rest of
     // the chunk teacher-forced through verify windows of T tokens, every token committed
     req_ppl = -1;
@@ -64,6 +65,7 @@ Flow Request::parse() {
             else if (key == "penalty_present") req_penalty_present = fv;
             else if (key == "seed") { req_seed = std::strtoull(tok.c_str() + eq + 1, nullptr, 10); req_seed_given = true; }
             else if (key == "relax") req_relax = fv;
+            else if (key == "route_bias") req_route_bias = fv;
             else if (key == "clip") req_clip = std::atoi(tok.c_str() + eq + 1);
             else if (key == "ppl") req_ppl = std::atoi(tok.c_str() + eq + 1);
             else if (key == "ppl_t") req_ppl_t = std::atoi(tok.c_str() + eq + 1);
@@ -83,6 +85,8 @@ Flow Request::parse() {
     else if (!std::isfinite(req_penalty_freq) || !std::isfinite(req_penalty_present))
         bad = "penalty_freq, penalty_present: numbers";
     else if (!(req_relax >= 0.0f && req_relax <= 1.0f)) bad = "relax: 0..1";
+    else if (!(std::isfinite(req_route_bias) && req_route_bias >= 0.0f && req_route_bias <= 16.0f))
+        bad = "route_bias: 0..16";
     if (bad == nullptr && runtime_.o.batch > 0 && runtime_.pipelined() && req_penalty_last_n > 0 &&
         (req_penalty_repeat != 1.0f || req_penalty_freq != 0.0f || req_penalty_present != 0.0f))
         bad = "penalties: pipelined batch groups are not supported";

@@ -293,6 +293,9 @@ public:
     void begin_token(int64_t, int n_tokens) override {
         if (tier_) tier_->begin_token(n_tokens);
     }
+    void set_route_bias(float lambda) override {
+        if (tier_) tier_->set_route_bias(lambda);
+    }
     void end_window(bool all) override {
         // the pieces that land while the window's output and the drafter's inputs are on their way
         constexpr int kEndPieces = 8;
