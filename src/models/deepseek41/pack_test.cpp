@@ -99,12 +99,13 @@ int run_all() {
               "the layout lines read to their fields");
     }
 
-    // 2. a format the build does not carry is refused, by layer and by id (Q2_K is 10, ggml names it not here)
+    // 2. a format the build does not carry is refused, by layer and by id. Id 30 is a hole of the ggml type list
+    //    here and in v0.3.1 (between IQ1_M = 29 and NVFP4 = 40), so the check does not depend on the vendored ggml.
     {
         Pack p;
-        const bool ok = open(d.path, "1 19 10 32768 4096", p, err);
-        check(!ok && err.find("layer 1") != std::string::npos && err.find("id 10") != std::string::npos,
-              "a down expert of type 10 is refused naming layer 1 and id 10: " + err);
+        const bool ok = open(d.path, "1 19 30 32768 4096", p, err);
+        check(!ok && err.find("layer 1") != std::string::npos && err.find("id 30") != std::string::npos,
+              "a down expert of type 30 is refused naming layer 1 and id 30: " + err);
     }
     {
         Pack p;

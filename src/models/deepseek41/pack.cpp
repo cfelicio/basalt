@@ -155,7 +155,7 @@ bool open_pack(const std::string& path, Pack& p, std::string& err) {
             }
             // an expert format this build does not carry has no size; the prompt path rounds a blob up to a
             // multiple of the sizes of its two formats, so opening such a pack would crash: refuse it by name
-            // (UD-IQ2_XXS carries layer 0's down experts as Q2_K, id 10, which this ggml does not list)
+            // (ggml_type_size answers the holes of the type list - 0-5, 24-28, 30-39, 41 - with 0)
             if (ggml_type_size((enum ggml_type) gu) == 0 || ggml_type_size((enum ggml_type) d) == 0) {
                 auto fmt = [](int t) {
                     const char* n = ggml_type_name((enum ggml_type) t);
