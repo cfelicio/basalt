@@ -74,6 +74,9 @@ public:
     virtual void reset() {}
     /// Called once per token, or per window of `n_tokens`, before its layers run.
     virtual void begin_token(int64_t pos, int n_tokens = 1) { (void) pos; (void) n_tokens; }
+    /// The --route-bias value for the windows to come: the expert tier marks the experts the cards hold with it, and
+    /// the router adds a mark to the selection score (0: the exact routing). Called before begin_token.
+    virtual void set_route_bias(float lambda) { (void) lambda; }
     /// Uploads what the layers read from device memory for the `n_tokens` tokens at `pos` (positions and window bounds),
     /// so the per-layer calls need no host input and can be captured into graphs. Called after begin_token. The rows of
     /// an earlier window before `pos` are kept; the rest are dropped.

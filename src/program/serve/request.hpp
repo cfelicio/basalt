@@ -34,6 +34,7 @@ protected:
     std::string req_grammar_text{};   // grammar=<compact ASCII JSON, spaces as \u0020>: the request's grammar (--grammar on)
     int req_cvec{};
     float req_relax{};
+    float req_route_bias{};   // route_bias=L: this request's --route-bias (models without the flag ignore it)
     int req_ppl{};
     int req_ppl_t{};
     int req_clip{};
@@ -123,6 +124,8 @@ protected:
     template <class B> Flow decode_loop(B& b);
     virtual bool parse_begin() { return true; }
     virtual float default_relax() const { return 0.0f; }
+    /// The engine's --route-bias, what a request that names none gets.
+    virtual float default_route_bias() const { return 0.0f; }
     // ---- the end of a request
     virtual Flow complete_begin() { return Flow::proceed; }
     virtual DoneCounts done_counts() { return {}; }

@@ -20,6 +20,8 @@
 namespace basalt::models::deepseek41 {
 namespace {
 
+constexpr float kRouteBiasDefault = 0.5f;   // the bias the bare --route-bias asks for
+
 class Adapter final : public model::ModelAdapter {
 public:
     const char* arch() const override { return "deepseek41"; }
@@ -87,6 +89,18 @@ public:
     bool parse_flag(const std::string& a, model::FlagArgs& args, program::CommonOptions& o, int& code) const override {
         (void) code;
         if (a == "--no-prompt-skip") o.no_prompt_skip = true;
+        else if (a == "--route-bias") {   // the value is optional: a number in (0, 16] (0: off) when one follows
+            o.route_bias = kRouteBiasDefault;
+            if (args.peek() != nullptr) {
+                char* e = nullptr;
+                const float v = std::strtof(args.peek(), &e);
+                if (e != args.peek() && *e == '\0') {
+                    args.take();
+                    if (!(v >= 0.0f && v <= 16.0f)) { basalt::log::error("basalt deepseek41", "--route-bias: LAMBDA must be 0 (off) or in (0, 16]"); { code = 2; return true; } }
+                    o.route_bias = v;
+                }
+            }
+        }
         else if (a == "--spec") { o.spec = std::atoi(args.next("--spec")); o.spec_given = true; }
         else if (a == "--spec-oracle") o.spec_oracle = args.next("--spec-oracle");
         else if (a == "--kv") o.kv = args.next("--kv");
@@ -124,6 +138,10 @@ public:
         if (o.spec >= 2 && o.spec_oracle.empty() && !drafter) {
             basalt::log::warn("basalt deepseek41", "--spec %d off: the pack has no dspark/gguf section", o.spec);
             o.spec = 0;
+        }
+        if (o.route_bias > 0.0f) {
+            basalt::log::warn("basalt deepseek41", "lossy flag enabled, it will affect the accuracy of the served model");
+            basalt::log::warn("basalt deepseek41", "--route-bias %g changes expert routing", (double) o.route_bias);
         }
         if (!opened || !file.load_meta(err)) return std::nullopt;
         const core::Json* kv = file.meta().get("gguf_kv");

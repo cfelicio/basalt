@@ -101,7 +101,9 @@ public:
                   buf(attn_out_, n * W) && buf(moe_out_, n * W) && buf(sh_out_, n * W) && buf(ffn_sum_, n * W) &&
                   buf(coef_a_, kHcCoef * W) && buf(coef_f_[0], kHcCoef * W) && buf(coef_f_[1], kHcCoef * W) &&
                   buf(hc_ws_, hc_mixes_workspace_floats(W)) && buf(rlogits_, (size_t) g_.n_expert * W) &&
-                  buf(rw_, 64) && buf(logits_, (size_t) g_.n_vocab * W);
+                  buf(rw_, 64) && buf(logits_, (size_t) g_.n_vocab * W) &&
+                  buf(held_bias_dev_, (size_t) g_.n_layers * g_.n_expert);
+        ok = ok && cudaMemset(held_bias_dev_, 0, (size_t) g_.n_layers * g_.n_expert * sizeof(float)) == cudaSuccess;
         for (size_t k = 0; ok && k < m_.pack().engram.layers.size(); ++k) {
             float *h = nullptr, *d = nullptr, *kv = nullptr;
             void* q = nullptr;
@@ -200,6 +202,8 @@ public:
     }
 
     model::Result decode_window(const model::DecodeRequest& r) override {
+        // the window's residency bias: the request's when it gave one, the engine's otherwise (0: the exact routing)
+        route_bias_ = r.route_bias >= 0.0f ? r.route_bias : m_.tiers().route_bias;
         if (r.row_tokens) {
             if (r.n_tokens > kMaxWindow) return {model::Status::Error, "deepseek41: the decode window is too long"};
             std::string err;
@@ -218,6 +222,7 @@ public:
     }
 
     model::Result prefill_chunk(const model::PrefillRequest& r) override {
+        route_bias_ = m_.tiers().route_bias;   // a read routes at the engine's value; a request's own takes effect in decode
         if (!prefillp::may_resume(r.pos, (int64_t) hist_.size(), whole_from_)) return {model::Status::Error, kSkippedRows};
         sync_rewind(r.pos);
         settle_tier();
@@ -715,6 +720,7 @@ private:
         ra.n_embd = (int) n;
         ra.k = g_.n_used;
         ra.weight_scale = g_.weight_scale;
+        ra.held_bias = held_bias_dev_ + (size_t) il * g_.n_expert;   // all zero, and the routing, exact
 
         // each sublayer's mixes run beside its collapse: only its expansion reads them
         DS_CUDA(cudaEventRecord(mix_ev_[0], stream_));
@@ -850,7 +856,19 @@ private:
         if ((int64_t) hist_.size() < pos) return fail("positions must be consecutive from 0 (the session keeps one sequence)");
         hist_.resize((size_t) pos);   // a position before the end drops the rejected rows of a window
         hist_.insert(hist_.end(), tokens, tokens + T);
+        ops_->set_route_bias(route_bias_);
         ops_->begin_token(pos, T);
+        // the held experts' table for this step: the tier rebuilt it with the residency as it now stands, and the
+        // bias only leaves the pinned copy non-zero when it is on or only just switched off (then the zeros must land)
+        if (route_bias_ > 0.0f || bias_was_on_) {
+            std::string te;
+            const ExpertTier* et = ops_->expert_tier(te);
+            if (et != nullptr && et->held_bias() != nullptr)
+                DS_CUDA(cudaMemcpyAsync(held_bias_dev_, et->held_bias(),
+                                        (size_t) g_.n_layers * g_.n_expert * sizeof(float), cudaMemcpyHostToDevice,
+                                        stream_));
+        }
+        bias_was_on_ = route_bias_ > 0.0f;
         {
             std::string se;
             if (!ops_->stage_token(pos, T, st, se)) return fail(se);
@@ -1037,6 +1055,9 @@ private:
     float *x_ = nullptr, *x2_ = nullptr, *cur_ = nullptr, *normed_ = nullptr, *attn_out_ = nullptr, *moe_out_ = nullptr,
           *sh_out_ = nullptr, *ffn_sum_ = nullptr, *coef_a_ = nullptr, *coef_f_[2] = {nullptr, nullptr},
           *hc_ws_ = nullptr, *rlogits_ = nullptr, *rw_ = nullptr, *logits_ = nullptr;
+    float* held_bias_dev_ = nullptr;   // [layer * n_expert + e] this step's held-expert selection-scores' extra, on the card
+    float route_bias_ = 0.0f;          // the decode windows' --route-bias (-1 never reaches here)
+    bool bias_was_on_ = false;         // the card's held table may still carry a bias since switched off
     // per Engram layer: its dequantized rows (mapped host memory) as the host and the kernels see them, the projection's
     // q8_1 scratch and result; the stream a projection one layer ahead runs on, its start and its end per layer
     std::vector<float*> erow_h_, erow_d_, ekv_;

@@ -394,6 +394,9 @@ def checked_sampling(req: dict) -> None:
     rd = req.get("relaxed_drafting")
     if rd is not None and rd is not False and not (_num(rd) and 0 <= rd <= 1):
         raise ValueError(f"relaxed_drafting: expected false or a number 0..1, not {rd!r}")
+    rb = req.get("route_bias")
+    if rb is not None and rb is not False and not (_num(rb) and 0 <= rb <= 16):
+        raise ValueError(f"route_bias: expected a number 0..16, not {rb!r}")
 
 
 def sampling_defaults_from_config(cfg: dict) -> dict:

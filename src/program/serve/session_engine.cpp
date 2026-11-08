@@ -56,6 +56,7 @@ public:
         if (o.batch > 0) {
             bs.resize((size_t) o.batch);
             slot_sampling_.resize((size_t) o.batch);
+            slot_route_bias_.assign((size_t) o.batch, o.route_bias);
         }
         conversations.emplace((size_t) o.conversation_cache_mib << 20, (size_t) o.conversation_cache_slots);
         if (o.conversation_cache_disk_mib > 0) {
@@ -304,7 +305,10 @@ public:
 
     basalt::model::ModelSession& session() { return *sessions_[(size_t) active_]; }
     void set_active(int slot) { active_ = slot; }
-    void set_slot_sampling(int slot, const basalt::kernels::SamplerParams& sp) { slot_sampling_[(size_t) slot] = sp; }
+    void set_slot_sampling(int slot, const basalt::kernels::SamplerParams& sp, float route_bias) {
+        slot_sampling_[(size_t) slot] = sp;
+        slot_route_bias_[(size_t) slot] = route_bias;
+    }
     const basalt::model::ModelDesc& desc() const { return model_.desc(); }
     /// --draft-log FILE, opened once.
     FILE* draft_log() {
@@ -328,6 +332,7 @@ private:
     basalt::model::LoadedModel& model_;
     std::vector<std::unique_ptr<basalt::model::ModelSession>> sessions_;
     std::vector<basalt::kernels::SamplerParams> slot_sampling_;
+    std::vector<float> slot_route_bias_;   // each slot's request's --route-bias
     std::vector<int32_t> win_, out_;   // a batch window's fed tokens and picks
     int active_ = 0;
 };
@@ -386,6 +391,7 @@ public:
         d.sampling = &req_sp;
         d.history = hist_n > 0 ? history_.data() : nullptr;
         d.history_len = hist_n;
+        d.route_bias = req_route_bias;
         req_sp.counter = draws_;
         const basalt::model::Result r = rt_.session().decode_window(d);
         if (!r.ok()) error_ = r.message;
@@ -492,7 +498,8 @@ private:
     }
     void adopt_checkpoints() override { runtime_.checks = std::move(incoming->checkpoints); }
     bool slot_leave() override { rt_.set_active(0); return true; }
-    void slot_set_sampling(int slot) override { rt_.set_slot_sampling(slot, req_sp); }
+    void slot_set_sampling(int slot) override { rt_.set_slot_sampling(slot, req_sp, req_route_bias); }
+    float default_route_bias() const override { return runtime_.o.route_bias; }
     Flow prompt_end() override {
         rt_.session().end_prompt();
         return Flow::proceed;
@@ -557,6 +564,7 @@ bool SessionRuntime::next_batch_window() {
         d.pos = sl.p;
         (T > 1 ? d.row_tokens : d.next_token) = out_.data();
         d.sampling = &sp;
+        d.route_bias = slot_route_bias_[(size_t) b];
         if (sl.pen_n > 0) {
             history.resize((size_t) T * sl.pen_n);
             basalt::kernels::penalty_rows(sl.ids.data(), (int64_t) sl.ids.size(), win_.data(), T, sl.pen_n, history.data());
