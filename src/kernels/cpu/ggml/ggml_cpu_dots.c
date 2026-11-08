@@ -447,6 +447,13 @@ static void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, co
 
     for (int i = 0; i < nb; ++i) {
 
+        // the expert row streams from DRAM (145 GB of weights in RAM): pull the block four ahead into L1 while
+        // this one sums; the activations stay hot in L1/L2 across the row loop
+        if (i + 4 < nb) {
+            _mm_prefetch((const char*) (x + i + 4), _MM_HINT_T0);
+            _mm_prefetch((const char*) (x + i + 4) + 64, _MM_HINT_T0);
+        }
+
         const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
         const float dmin = -y[i].d * GGML_CPU_FP16_TO_FP32(x[i].dmin);
 
@@ -530,6 +537,12 @@ static void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, co
     uint32_t aux[3];
 
     for (int i = 0; i < nb; ++i) {
+
+        // streamed expert row: pull the block four ahead into L1 while this one sums (as in the Q2_K dot)
+        if (i + 4 < nb) {
+            _mm_prefetch((const char*) (x + i + 4), _MM_HINT_T0);
+            _mm_prefetch((const char*) (x + i + 4) + 64, _MM_HINT_T0);
+        }
 
         const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
 
