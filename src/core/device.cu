@@ -12,9 +12,16 @@ namespace basalt::core {
 
 namespace {
 
+// A driverless runtime can answer with a code it has no text for (Windows: 801); a null pointer must never
+// reach a string, a printf or a log.
+const char* error_text(cudaError_t e) {
+    const char* text = cudaGetErrorString(e);
+    return text != nullptr ? text : "unknown CUDA error";
+}
+
 void check(cudaError_t e, const char* what) {
     if (e != cudaSuccess) {
-        throw CudaError(std::string(what) + ": " + cudaGetErrorString(e), (int) e);
+        throw CudaError(std::string(what) + ": " + error_text(e), (int) e);
     }
 }
 
@@ -94,7 +101,7 @@ DeviceRates device_rates(int ordinal) {
 namespace {
 
 std::string device_fault(const char* call, cudaError_t e, int ordinal) {
-    return std::string(call) + ": " + cudaGetErrorString(e) + " (code " + std::to_string((int) e) + "), device " +
+    return std::string(call) + ": " + error_text(e) + " (code " + std::to_string((int) e) + "), device " +
            std::to_string(ordinal) + " of " + std::to_string(device_count());
 }
 
@@ -200,7 +207,7 @@ std::string device_code_error() {
     const cudaError_t e = cudaFuncGetAttributes(&a, poison_kernel);
     if (e == cudaSuccess) return {};
     cudaGetLastError();
-    return cudaGetErrorString(e);
+    return error_text(e);
 }
 
 DeviceInfo device_info(int ordinal) {

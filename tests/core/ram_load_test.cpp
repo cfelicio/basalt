@@ -192,52 +192,34 @@ void fallback_case() {
 void unserved_card_case() {
     std::string why;
     uint64_t f = 0, t = 0;
-    int probe_n = -1;
-    const cudaError_t probe_c = cudaGetDeviceCount(&probe_n);
-    std::printf("probe cudaGetDeviceCount -> %d (%s), cards %d\n", (int) probe_c, cudaGetErrorString(probe_c), probe_n);
-    int probe_prev = -1;
-    const cudaError_t probe_g = cudaGetDevice(&probe_prev);
-    std::printf("probe cudaGetDevice -> %d (%s), prev %d\n", (int) probe_g, cudaGetErrorString(probe_g), probe_prev);
-    const cudaError_t probe_s = cudaSetDevice(99);
-    std::printf("probe cudaSetDevice(99) -> %d (%s)\n", (int) probe_s, cudaGetErrorString(probe_s));
-    std::printf("probe cudaGetLastError -> %d (%s)\n", (int) cudaGetLastError(), cudaGetErrorString(cudaGetLastError()));
-    std::printf("unserved: device_memory\n");
     check(!device_memory(99, f, t, why), "a card that does not exist has no memory to read");
     check(why.rfind("cuda", 0) == 0 && why.find("(code ") != std::string::npos && why.find("device 99 of ") != std::string::npos,
           "the failure names the call, the error code and the card");
     why.clear();
-    std::printf("unserved: devices_allocate 99\n");
     check(!devices_allocate({99}, why) && why.find("device 99 of ") != std::string::npos, "an unserved card fails the allocation check");
-    // A host with no CUDA driver cannot clear its error: every call, cudaGetLastError included, reports 35, so the
-    // no-sticky-error invariant is only observable where the runtime has a card to work with.
+    // A host with no CUDA driver cannot clear its error: every call, cudaGetLastError included, reports an error, so
+    // the no-sticky-error invariant is only observable where the runtime has a card to work with.
     const cudaError_t last = cudaGetLastError();
-    if (last != cudaSuccess) std::printf("sticky %d: %s\n", (int) last, cudaGetErrorString(last));
+    const char* last_text = cudaGetErrorString(last);
+    if (last != cudaSuccess) std::printf("sticky %d: %s\n", (int) last, last_text != nullptr ? last_text : "unknown CUDA error");
     if (device_count() > 0) check(last == cudaSuccess, "the checks leave no sticky error");
-    std::printf("unserved: devices_allocate empty\n");
     check(devices_allocate({}, why), "no cards, nothing to fail");
-    std::printf("unserved: devices_allocate -1\n");
     std::string why2;
     check(devices_allocate({-1}, why) == device_memory(-1, f, t, why2), "the current card (-1) is served exactly when it answers a query");
-    std::printf("unserved: done\n");
 }
 
 }  // namespace
 
 int main() {
-    std::setvbuf(stdout, nullptr, _IONBF, 0);
     for (bool unbuffered : {true, false})
         for (int threads : {1, 4}) {
-            std::printf("arena unbuffered=%d threads=%d\n", (int) unbuffered, threads);
             arena_case(0, 4096 * 8, unbuffered, threads);      // block aligned: straight into RAM
             arena_case(4096, 4096 * 2 + 100, unbuffered, threads);   // not aligned: the staging or the fallback
             arena_case(1000, 4096 * 3, unbuffered, threads);
         }
-    std::printf("span\n");
     span_case(0, 4096 * 4);
     span_case(1000, 4096 * 2 + 100);
-    std::printf("fallback\n");
     fallback_case();
-    std::printf("unserved\n");
     unserved_card_case();
     std::printf(fails == 0 ? "ram_load_test: ok\n" : "ram_load_test: %d failures\n", fails);
     return fails == 0 ? 0 : 1;
