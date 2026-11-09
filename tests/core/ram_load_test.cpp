@@ -197,7 +197,9 @@ void unserved_card_case() {
           "the failure names the call, the error code and the card");
     why.clear();
     check(!devices_allocate({99}, why) && why.find("device 99 of ") != std::string::npos, "an unserved card fails the allocation check");
-    check(cudaGetLastError() == cudaSuccess, "the checks leave no sticky error");
+    const cudaError_t last = cudaGetLastError();
+    if (last != cudaSuccess) std::printf("sticky %d: %s\n", (int) last, cudaGetErrorString(last));
+    check(last == cudaSuccess, "the checks leave no sticky error");
     check(devices_allocate({}, why), "no cards, nothing to fail");
     std::string why2;
     check(devices_allocate({-1}, why) == device_memory(-1, f, t, why2), "the current card (-1) is served exactly when it answers a query");
