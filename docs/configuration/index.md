@@ -144,6 +144,7 @@ Unless `relaxed-drafting` is on, output is exactly plain decoding's.
 | `route-tail-skip` | engine (`[R]`) | `true` or 1 to 9 | off | Flash-Next only. **Changes output.** Skips experts no GPU holds when they rank R or lower in every window entry. Needs the device MoE tail. [precision](../precision/qwen38-flash-next.md#lossy-routing-flags) |
 | `route-prior` | engine (`[LAMBDA]`) | `true` or 0 to 16 | off | Flash-Next only. **Changes output.** Adds LAMBDA to held experts' router logits. Needs the device MoE tail. [precision](../precision/qwen38-flash-next.md#lossy-routing-flags) |
 | `route-bias` | engine (`[LAMBDA]`) | `true` or 0 to 16 | off | DeepSeek-V4.1 only. **Changes output.** Adds LAMBDA to the selection score of the experts a card holds; the weights stay the router's. A request can set its own (`route_bias=LAMBDA`). [guide](../models/deepseek41.md#lossy-flags) |
+| `staging-pinned-only` | engine | switch | off | DeepSeek only. Stages a layer's PCIe expert copies only when its RAM span is CUDA-registered; a locked-only span sends every miss to the CPU pool, avoiding pageable H2D staging. Placement differs, routing does not. |
 
 ## Parallel slots
 

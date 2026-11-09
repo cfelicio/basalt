@@ -200,6 +200,10 @@ private:
     void seed_copies(int64_t n);
     void preread();
     bool pinned(int layer, int e) const { return ram_idx_[(size_t) layer * n_expert_ + e] >= 0; }
+    /// The layer's RAM span is CUDA-registered, so its host pointers copy at the bus's pinned rate.
+    bool ram_registered(int layer) const {
+        return layer >= 0 && (size_t) layer < ram_pins_.size() && ram_pins_[(size_t) layer].registered_bytes > 0;
+    }
     const uint8_t* blob_of(int layer, int e) const;
     const uint8_t* slot_ptr(int32_t slot) const;
     uint64_t slot_total() const { return (uint64_t) n_layers_ * (uint64_t) (per_layer_ + ext_per_layer_); }
@@ -285,6 +289,7 @@ private:
     kernels::cpu::ExpertJobMulti cpu_jobs_[kMaxK];   ///< the CPU share started and not yet joined
 
     int64_t hits_ = 0, cpu_ = 0, ram_hits_ = 0, promoted_ = 0, fetched_ = 0, dropped_ = 0, peer_hits_ = 0, file_hits_ = 0;
+    int64_t staged_pinned_ = 0, staged_locked_ = 0;   ///< fetched copies from CUDA-registered and locked-only spans
 };
 
 }  // namespace basalt::models::deepseek41

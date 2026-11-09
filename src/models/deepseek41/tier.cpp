@@ -100,6 +100,12 @@ bool ExpertTier::open(const Reserve& reserve, float* h_rows, std::string& err) {
         copies = (int) std::min<int64_t>(copies, cap_per_layer_);
         main_homes = (int) std::min<int64_t>(main_homes, cap_per_layer_);
     }
+    // What the start left out of the tier's sizing: the caches of a full context, the kernel modules, and the floor.
+    basalt::log::info("basalt deepseek41",
+                      "VRAM tier sizing: %.0f MiB free; %.0f MiB kept free (the full context's caches and the kernel "
+                      "modules, and a %.0f MiB floor); one slot of every layer %.1f MiB, %d slots fit",
+                      (double) free_b / 1048576.0, (double) (reserve.copies + asked_free) / 1048576.0,
+                      (double) asked_free / 1048576.0, (double) one_each / 1048576.0, copies);
 
     int peer_slots = 0;
     if (m_.peer_device() >= 0) {
@@ -452,6 +458,8 @@ bool ExpertTier::load_ram(std::string& err) {
         ram_pins_ = core::pin_ram_spans(ram_, span_bytes, /*mapped=*/false);
         int unpinned = 0;
         for (const core::RamPin& p : ram_pins_) unpinned += p.registered_bytes == 0;
+        basalt::log::info("basalt deepseek41", "RAM expert tier pinning: %d of %d layers CUDA-registered, %d locked only",
+                          n_layers_ - unpinned, n_layers_, unpinned);
         if (unpinned > 0)
             basalt::log::warn("basalt deepseek41", "RAM expert tier: %d of %d layers not pinned, locked: %s", unpinned, n_layers_,
                               ram_pins_[(size_t) n_layers_ - 1].lock_note.c_str());
@@ -910,6 +918,9 @@ void ExpertTier::flush_queue() { pump(kAllPieces); }
 
 int ExpertTier::fetch(int layer, Lookup& lk) {
     if (m_.tiers().diag_tier_frozen) return 0;
+    const bool registered = ram_registered(layer);
+    // A locked-only span copies through the runtime's pageable staging; the CPU pool computes those misses instead.
+    if (m_.tiers().staging_pinned_only && !registered) return 0;
     int np = 0, nf = 0;
     for (int i = 0; i < lk.k; ++i)
         if (!lk.dev[i] && !lk.peer[i]) ++(pinned(layer, lk.experts[i]) ? np : nf);
@@ -926,6 +937,7 @@ int ExpertTier::fetch(int layer, Lookup& lk) {
         --cpu_;
         ++fetched_;
         ++started;
+        ++(registered ? staged_pinned_ : staged_locked_);
     }
     if (started) cudaEventRecord(fetch_ev_, fetch_stream_);
     return started;
@@ -935,6 +947,7 @@ void ExpertTier::await_fetch(cudaStream_t main) { cudaStreamWaitEvent(main, fetc
 
 void ExpertTier::promote(int layer, const Lookup& lk) {
     if (m_.tiers().diag_tier_frozen) return;
+    if (m_.tiers().staging_pinned_only && !ram_registered(layer)) return;   // no pageable staging even off the token path
     for (int i = 0; i < lk.k; ++i) {
         if (lk.dev[i] || !lk.again[i] || !pinned(layer, lk.experts[i])) continue;   // pinned sources only
         if (!move_to_peer(layer, lk.experts[i], lk.host[i]))
@@ -1030,9 +1043,10 @@ void ExpertTier::set_free_floor(int64_t mib) { free_floor_ = mib < 0 ? start_flo
 void ExpertTier::report(const char* tag) const {
     const int64_t n = hits_ + cpu_ + fetched_ + peer_hits_;
     if (n == 0) return;
-    basalt::log::info("basalt deepseek41", "TIER %s: %lld lookups: %.1f%% VRAM, %.1f%% second card, %.1f%% bus copy, %.1f%% CPU (file %.1f%%); promoted %lld, dropped %lld, swapped %lld", tag,
+    basalt::log::info("basalt deepseek41", "TIER %s: %lld lookups: %.1f%% VRAM, %.1f%% second card, %.1f%% bus copy, %.1f%% CPU (file %.1f%%); promoted %lld, dropped %lld, swapped %lld; staged on pinned %lld, on locked-only %lld", tag,
                  (long long) n, 100.0 * (double) hits_ / (double) n, 100.0 * (double) peer_hits_ / (double) n, 100.0 * (double) fetched_ / (double) n,
-                 100.0 * (double) cpu_ / (double) n, 100.0 * (double) file_hits_ / (double) n, (long long) promoted_, (long long) dropped_, (long long) swapped_);
+                 100.0 * (double) cpu_ / (double) n, 100.0 * (double) file_hits_ / (double) n, (long long) promoted_, (long long) dropped_, (long long) swapped_,
+                 (long long) staged_pinned_, (long long) staged_locked_);
 }
 
 }  // namespace basalt::models::deepseek41

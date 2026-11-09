@@ -89,7 +89,10 @@ struct CommonOptions {
     float route_bias = 0.0f;           ///< --route-bias LAMBDA: decode routing favours the held experts (0: off)
     int drafter_device = -1;           ///< --diag-drafter-gpu N: the CUDA device it runs on (-1: the main card)
     bool diag_teacher = false;         ///< --diag-teacher: --spec-oracle's tokens go on whatever the picks
-    bool diag_tier_frozen = false;     ///< --diag-tier-frozen: the VRAM tier keeps what it holds
+    bool diag_tier_frozen = false;         ///< --diag-tier-frozen: the VRAM tier keeps what it holds
+    /// --staging-pinned-only (DeepSeek): a layer whose RAM span the driver would not pin sends every miss to the CPU
+    /// pool instead of staging some over PCIe; pageable host sources copy at a fraction of the pinned rate.
+    bool staging_pinned_only = false;
     std::string diag_dump;                 ///< --diag-dump DIR: a model's per-layer tensors, off by default
     int diag_tier_ram = -1, diag_tier_vram = -1;   ///< --diag-tier-ram / --diag-tier-vram: fixed expert-tier sizes
     bool diag_serial_prompt = false;       ///< --diag-serial-prompt: an adapter model reads its prompt one decode step at a time

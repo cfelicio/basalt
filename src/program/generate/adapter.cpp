@@ -365,6 +365,7 @@ int run_session_model(basalt::program::CommonOptions& o, const basalt::model::Mo
         lreq.profile_dir = basalt::platform::install_root() + "/data/profiles";
         lreq.draft_experts = o.draft_experts;
         lreq.diag_tier_frozen = o.diag_tier_frozen;
+        lreq.staging_pinned_only = o.staging_pinned_only;
         lreq.kv = o.kv;
         lreq.route_bias = o.route_bias;
         const basalt::model::Result r = adapter->load(lreq, loaded);

@@ -7,6 +7,9 @@ name: release-windows
 # ci.yml on every pull request (Linux and Windows); this workflow only packages.
 on:
   push:
+    branches:
+      # a workstation feature branch builds the same zip as a workflow artifact, so a fork can test it before a tag
+      - feat/epyc7443-rtx5070ti-lossless-opt
     tags:
       - "v*"
   workflow_dispatch:
