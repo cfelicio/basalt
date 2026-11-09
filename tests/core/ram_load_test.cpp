@@ -192,6 +192,15 @@ void fallback_case() {
 void unserved_card_case() {
     std::string why;
     uint64_t f = 0, t = 0;
+    int probe_n = -1;
+    const cudaError_t probe_c = cudaGetDeviceCount(&probe_n);
+    std::printf("probe cudaGetDeviceCount -> %d (%s), cards %d\n", (int) probe_c, cudaGetErrorString(probe_c), probe_n);
+    int probe_prev = -1;
+    const cudaError_t probe_g = cudaGetDevice(&probe_prev);
+    std::printf("probe cudaGetDevice -> %d (%s), prev %d\n", (int) probe_g, cudaGetErrorString(probe_g), probe_prev);
+    const cudaError_t probe_s = cudaSetDevice(99);
+    std::printf("probe cudaSetDevice(99) -> %d (%s)\n", (int) probe_s, cudaGetErrorString(probe_s));
+    std::printf("probe cudaGetLastError -> %d (%s)\n", (int) cudaGetLastError(), cudaGetErrorString(cudaGetLastError()));
     std::printf("unserved: device_memory\n");
     check(!device_memory(99, f, t, why), "a card that does not exist has no memory to read");
     check(why.rfind("cuda", 0) == 0 && why.find("(code ") != std::string::npos && why.find("device 99 of ") != std::string::npos,
