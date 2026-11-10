@@ -55,7 +55,7 @@ int main() {
     CHECK(bus_count(0, 4, 100) == 0);
     CHECK(bus_count(4, 4, 75) == 4);
     CHECK(bus_count(2, 2, 25) == 1);
-    CHECK(bus_count(4, 0, -1) == bus_count(4, 0, 50));
+    CHECK(bus_count(4, 0, -1) == bus_count(4, 0, 0));   // a negative share clamps to 0; the tier resolves its -1 to 50
     CHECK(bus_count(4, 0, 101) == bus_count(4, 0, 100));
     for (int share : {0, 25, 50, 75, 100})
         for (int p = 0; p <= 6; ++p)
