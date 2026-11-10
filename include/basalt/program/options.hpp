@@ -93,6 +93,9 @@ struct CommonOptions {
     /// --diag-staging-pinned-only: a tier whose RAM span the driver would not pin sends every miss to the CPU pool
     /// instead of staging some over PCIe; pageable host sources copy at a fraction of the pinned rate.
     bool staging_pinned_only = false;
+    /// --diag-pcie-stage-share PCT: the share of a pinned layer's misses the bus may stage (0-100; -1 keeps the
+    /// policy's 50%); file-backed misses always stay with the CPU pool.
+    int diag_pcie_stage_share = -1;
     std::string diag_dump;                 ///< --diag-dump DIR: a model's per-layer tensors, off by default
     int diag_tier_ram = -1, diag_tier_vram = -1;   ///< --diag-tier-ram / --diag-tier-vram: fixed expert-tier sizes
     bool diag_serial_prompt = false;       ///< --diag-serial-prompt: an adapter model reads its prompt one decode step at a time

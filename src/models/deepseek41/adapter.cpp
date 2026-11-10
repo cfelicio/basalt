@@ -109,6 +109,7 @@ public:
         else if (a == "--diag-teacher") o.diag_teacher = true;
         else if (a == "--diag-tier-frozen") o.diag_tier_frozen = true;
         else if (a == "--diag-staging-pinned-only") o.staging_pinned_only = true;
+        else if (a == "--diag-pcie-stage-share") o.diag_pcie_stage_share = std::atoi(args.next("--diag-pcie-stage-share"));
         else if (a == "--draft-log") basalt::core::diagnostics().draft_log = args.next("--draft-log");
         else return false;
         return true;
@@ -116,6 +117,10 @@ public:
 
     // A context the pack refuses is refused with the flags, before anything loads; the memory check needs the card.
     std::optional<int> finish_flags(program::CommonOptions& o) const override {
+        if (o.diag_pcie_stage_share < -1 || o.diag_pcie_stage_share > 100) {
+            basalt::log::error("basalt deepseek41", "--diag-pcie-stage-share %d: 0 to 100", o.diag_pcie_stage_share);
+            return 2;
+        }
         CacheFormat fmt = CacheFormat::Fp8;
         if (o.kv.empty()) o.kv = "fp8";
         if (!ctxp::cache_format(o.kv, fmt)) {

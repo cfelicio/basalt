@@ -9,6 +9,7 @@ namespace basalt::models::deepseek41::policy {
 constexpr int kPromoteWindow = 64;              // tokens within which a repeat miss earns a VRAM slot
 constexpr int kAdmitWindow = 256;               // tokens within which a repeat file miss earns a pinned slot
 constexpr int kSwapsPerToken = 2;               // pinned-slot swaps started per token
+constexpr int kBusSharePct = 50;                // percent of a pinned layer's misses the bus stages (the rest: CPU pool)
 constexpr uint64_t kPieceBytes = 1ull << 20;    // largest single promotion copy
 constexpr int kPeerGapPieces = 3;               // second card exchange pieces per layer: about what one head leaves its bus
 constexpr uint64_t kPeerMoveAge = 1280;         // lookups (~32 windows) the second card's victim must be older than the main card's
@@ -58,13 +59,14 @@ inline Place place_of_rank(const Homes& h, int copies, int r) {
     return r < h.main + h.peer + h.ram ? Place::Ram : Place::File;
 }
 
-/// Misses of a layer go half to the CPU (rounded up) and the rest to the bus; the file-backed ones can only go to the
-/// CPU. Returns how many of the `pinned` misses the bus fetches, given `file` file-backed misses.
-inline int bus_count(int pinned, int file) {
+/// Misses of a layer go to the bus up to `share` percent of all its misses, and never more than the pinned ones; the CPU
+/// takes the rest, and every file-backed miss. Returns how many of the `pinned` misses the bus fetches, given `file`
+/// file-backed misses. 50 (the default) is the historical half; 100 stages every pinned miss.
+inline int bus_count(int pinned, int file, int share = 50) {
+    const int pct = share < 0 ? 0 : share > 100 ? 100 : share;
     const int m = pinned + file;
-    const int cpu = (m + 1) / 2 > file ? (m + 1) / 2 : file;
-    const int n = m - cpu;
-    return n < 0 ? 0 : n > pinned ? pinned : n;
+    int n = (int) (((int64_t) m * pct) / 100);
+    return n > pinned ? pinned : n;
 }
 
 /// Copies of at most kPieceBytes needed for `bytes`.

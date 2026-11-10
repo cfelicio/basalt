@@ -95,6 +95,7 @@ struct LoadRequest {
     int draft_experts = 32;           ///< the drafter's routed experts each stage keeps (0: all)
     bool diag_tier_frozen = false;    ///< diagnostic: the VRAM tier keeps what it holds, no bus copy and no promotion
     bool staging_pinned_only = false;  ///< stage only the misses of layers whose RAM span is CUDA-registered
+    int diag_pcie_stage_share = -1;    ///< diagnostic: the bus's share of a pinned layer's misses (0-100; -1: policy's 50)
     std::string kv;                   ///< --kv: the KV storage as the model names it, checked by its flags (empty: default)
     float route_bias = 0.0f;          ///< --route-bias: the decode routing's held-expert score bias (0: off)
 };

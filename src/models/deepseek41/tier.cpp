@@ -245,6 +245,9 @@ bool ExpertTier::open(const Reserve& reserve, float* h_rows, std::string& err) {
     program::warn_spill(spill(), peer_ ? "" : ", or --gpu 0,1");
     basalt::log::info("basalt deepseek41", "VRAM expert tier %.2f GiB, %lld of %d experts per layer (%.0f%%); CPU pool %d workers",
                  cache_.gib(), (long long) per_layer_, n_expert_, 100.0 * (double) per_layer_ / n_expert_, pool_->workers());
+    if (m_.tiers().diag_pcie_stage_share >= 0)
+        basalt::log::info("basalt deepseek41", "PCIe staging share %d%% of each pinned layer's misses (--diag-pcie-stage-share)",
+                     m_.tiers().diag_pcie_stage_share);
     return true;
 }
 
@@ -924,7 +927,8 @@ int ExpertTier::fetch(int layer, Lookup& lk) {
     int np = 0, nf = 0;
     for (int i = 0; i < lk.k; ++i)
         if (!lk.dev[i] && !lk.peer[i]) ++(pinned(layer, lk.experts[i]) ? np : nf);
-    int left = policy::bus_count(np, nf);
+    int left = policy::bus_count(np, nf, m_.tiers().diag_pcie_stage_share >= 0 ? m_.tiers().diag_pcie_stage_share
+                                                                              : policy::kBusSharePct);
     int started = 0;
     for (int i = lk.k - 1; i >= 0 && left > 0; --i) {
         if (lk.dev[i] || !pinned(layer, lk.experts[i])) continue;   // pinned sources only
