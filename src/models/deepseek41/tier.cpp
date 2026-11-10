@@ -982,12 +982,22 @@ void ExpertTier::lend_all() {
     cudaStreamSynchronize(copy_stream_);
     cudaStreamSynchronize(fetch_stream_);
     drain();
+    const int64_t lent = per_layer_;
+    const double gib = cache_.gib();
     std::fill(res_.begin(), res_.end(), -1);
     owner_.clear();
     busy_.clear();
     lent_per_layer_ = per_layer_;
     per_layer_ = 0;
     cache_.close();
+    uint64_t free_b = 0, total_b = 0;
+    std::string why;
+    if (core::device_memory(-1, free_b, total_b, why))
+        basalt::log::info("basalt deepseek41", "VRAM expert tier lent all %lld slots/layer for the read (%.2f GiB returned; %.2f GiB free now); reclaim reopens them after the read",
+                     (long long) lent, gib, (double) free_b / (1024.0 * 1024.0 * 1024.0));
+    else
+        basalt::log::info("basalt deepseek41", "VRAM expert tier lent all %lld slots/layer for the read (%.2f GiB returned); reclaim reopens them after the read",
+                     (long long) lent, gib);
 }
 
 bool ExpertTier::reclaim(std::string& err) {
@@ -998,8 +1008,13 @@ bool ExpertTier::reclaim(std::string& err) {
         err = "deepseek41: cannot query the free device memory: " + why;
         return false;
     }
-    const int64_t n = policy::reclaim_slots(free_b, reserve_, free_floor_, one_each_, lent_per_layer_);
-    if (n < 1) return true;   // nothing fits above the reserve: the slots stay lent
+    const int64_t lent = lent_per_layer_;
+    const int64_t n = policy::reclaim_slots(free_b, reserve_, free_floor_, one_each_, lent);
+    if (n < 1) {   // nothing fits above the reserve: the slots stay lent
+        basalt::log::info("basalt deepseek41", "VRAM expert tier cannot reopen a slot after the read (%.2f GiB free; %.2f GiB must stay free)",
+                     (double) free_b / (1024.0 * 1024.0 * 1024.0), (double) (reserve_ + free_floor_) / (1024.0 * 1024.0 * 1024.0));
+        return true;
+    }
     std::vector<int64_t> slot_bytes;
     for (int l = 0; l < n_layers_; ++l)
         for (int64_t s = 0; s < n; ++s) slot_bytes.push_back((int64_t) m_.pack().experts[(size_t) l].blob_bytes);
@@ -1008,6 +1023,10 @@ bool ExpertTier::reclaim(std::string& err) {
     lent_per_layer_ = 0;
     owner_.assign(slot_bytes.size(), -1);
     busy_.assign(slot_bytes.size(), 0);
+    if (n < lent)
+        basalt::log::info("basalt deepseek41", "VRAM expert tier reopens %lld of %lld slots/layer after the read (%.2f GiB free; %.2f GiB kept for a short read beside the slots)",
+                     (long long) n, (long long) lent, (double) free_b / (1024.0 * 1024.0 * 1024.0),
+                     (double) (reserve_ + free_floor_) / (1024.0 * 1024.0 * 1024.0));
     return true;
 }
 
@@ -1042,6 +1061,19 @@ void ExpertTier::grow() {
 }
 
 void ExpertTier::set_free_floor(int64_t mib) { free_floor_ = mib < 0 ? start_floor_ : (uint64_t) mib << 20; }
+
+void ExpertTier::report_slots(const char* when) const {
+    const int64_t total = per_layer_ + ext_per_layer_;
+    uint64_t free_b = 0, total_b = 0;
+    std::string why;
+    if (core::device_memory(-1, free_b, total_b, why))
+        basalt::log::info("basalt deepseek41", "VRAM expert tier %lld of %d experts per layer (%lld base + %lld beside) after %s; %.2f GiB free, %.2f GiB kept for a short read",
+                     (long long) total, n_expert_, (long long) per_layer_, (long long) ext_per_layer_, when,
+                     (double) free_b / (1024.0 * 1024.0 * 1024.0), (double) (reserve_ + free_floor_) / (1024.0 * 1024.0 * 1024.0));
+    else
+        basalt::log::info("basalt deepseek41", "VRAM expert tier %lld of %d experts per layer (%lld base + %lld beside) after %s",
+                     (long long) total, n_expert_, (long long) per_layer_, (long long) ext_per_layer_, when);
+}
 
 void ExpertTier::report(const char* tag) const {
     const int64_t n = hits_ + cpu_ + fetched_ + peer_hits_;

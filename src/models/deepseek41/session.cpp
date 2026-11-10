@@ -352,7 +352,13 @@ public:
         std::string e;
         ExpertTier* t = ops_ ? ops_->expert_tier(e) : nullptr;
         const std::string kv = m_.cache_format() == CacheFormat::Fp8 ? "kv=fp8+fp4" : "kv=fp16";
-        return t == nullptr ? kv : "expert_slots=" + std::to_string(t->slots()) + " " + kv + " " + program::spill_words(t->spill());
+        const uint64_t drafter_b = drafter_ ? drafter_->device_bytes() : 0;
+        uint64_t free_b = 0, total_b = 0;
+        std::string why;
+        const std::string free_words = core::device_memory(-1, free_b, total_b, why)
+            ? " vram_free_mib=" + std::to_string(free_b >> 20) : std::string();
+        const std::string slots = t == nullptr ? kv : "expert_slots=" + std::to_string(t->slots()) + " " + kv + " " + program::spill_words(t->spill());
+        return slots + " drafter_mib=" + std::to_string(drafter_b >> 20) + free_words;
     }
 
     size_t cells_bytes(int64_t positions) const override { return ops_ ? ops_->cache_bytes(positions) : 0; }
@@ -577,6 +583,7 @@ private:
         prefill_.reset();
         if (!t->reclaim(e)) basalt::log::warn("basalt deepseek41", "VRAM expert tier stays closed: %s", e.c_str());
         t->grow();
+        t->report_slots("the read");
     }
 
     // A chunk hands the drafter the target features of its last rows: the window a draft after it attends.

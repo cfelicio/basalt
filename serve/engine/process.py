@@ -86,6 +86,23 @@ def engine_line(line: str) -> str:
     return line[:-2] + "\n" if line.endswith("\r\n") else line
 
 
+TIER_SLOTS = re.compile(r"VRAM expert tier (\d+) of (\d+) experts per layer")
+
+
+def note_tier_slots(line: str, info: dict) -> bool:
+    """Keep `/metrics`' expert slot count current from a tier line; False when the line is not one or cannot be
+    converted. The tier names slots and experts per layer, so the model's layer count comes from `spill_total`."""
+    m = TIER_SLOTS.search(line)
+    if not m:
+        return False
+    per_layer, per_experts = int(m.group(1)), int(m.group(2))
+    total = info.get("spill_total")
+    if not isinstance(total, int) or per_experts <= 0 or total % per_experts:
+        return False
+    info["expert_slots"] = per_layer * (total // per_experts)
+    return True
+
+
 AUTO_FLAGS = "auto flags: "
 # the console's names: short ones, and `resident` is only the experts held in RAM, not the model
 AUTO_NAMES = {"peer-exclusive": "peer-excl", "pool-workers": "pool", "resident": "ram-experts"}
@@ -389,6 +406,7 @@ class ProcessEngine:
         for line in proc.stdout:
             line = engine_line(line)
             log_unparsed(line, log)
+            note_tier_slots(line, self.info)
             if line.startswith(AUTO_FLAGS):             # printed once, before READY; never a reply line
                 continue
             if line.startswith(FATAL_PREFIXES):         # before batch routing

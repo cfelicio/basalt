@@ -44,9 +44,9 @@ int main() {
     CHECK(bus_count(2, 1, 50) == 1);
     CHECK(bus_count(1, 2, 50) == 1);
     CHECK(bus_count(3, 3, 50) == 3);
-    // this branch's default stages every pinned miss; a named share scales the bus's part, never taking a file-backed
-    // miss and never more than the pinned misses
-    CHECK(bus_count(4, 0) == 4);
+    // the default keeps the historical half; a named share scales the bus's part, never taking a file-backed miss and
+    // never more than the pinned misses
+    CHECK(bus_count(4, 0) == 2);
     CHECK(bus_count(3, 3) == 3);
     CHECK(bus_count(1, 5) == 1);
     CHECK(bus_count(4, 0, 0) == 0);

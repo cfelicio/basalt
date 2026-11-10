@@ -81,6 +81,9 @@ public:
     /// copies go back whole, and reclaim() opens them again empty. Homes stay.
     void lend_all();
     bool reclaim(std::string& err);
+    /// Logs the effective slots per layer, what of them is beside the base arena, and the card's free bytes. Called
+    /// after a long read gives its slots back, where the difference from the startup size otherwise has no explanation.
+    void report_slots(const char* when) const;
     /// Main card bytes the tier, the caches and the prompt path leave free: --vram-reserve-mib, or `mib` once set
     /// (`mib` < 0: back to the start's). The arena is not resized here.
     void set_free_floor(int64_t mib);

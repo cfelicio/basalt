@@ -10,7 +10,7 @@ from unittest import mock
 
 from serve.frontend import ChatTemplate
 from serve.engine.errors import EngineDied
-from serve.engine.process import ProcessEngine
+from serve.engine.process import ProcessEngine, note_tier_slots
 from serve.handler import serve
 from serve.service import Service
 from serve.util.text import ByteTokenizer
@@ -70,6 +70,18 @@ class EngineCommand(unittest.TestCase):
 
     def test_args_pass_through(self):
         self.assertEqual(engine_args({"args": ["--max-context", "8192"]}), ["--max-context", "8192"])
+
+
+class TierSlots(unittest.TestCase):
+    def test_the_live_tier_line_updates_the_slot_count(self):
+        info = {"spill_total": 15360}
+        line = "basalt deepseek41: VRAM expert tier 4 of 384 experts per layer (1 base + 3 beside) after the read; ...\n"
+        self.assertTrue(note_tier_slots(line, info))
+        self.assertEqual(info["expert_slots"], 160)
+        self.assertFalse(note_tier_slots("basalt deepseek41: VRAM tier 3.04 GiB, 8 of 384 experts per layer\n", info))
+        missing = {"expert_slots": 320}
+        self.assertFalse(note_tier_slots(line, missing))     # no layer count: leave the INFO count
+        self.assertEqual(missing["expert_slots"], 320)
 
 
 class Route(unittest.TestCase):
