@@ -546,6 +546,7 @@ private:
     model::Result prompt_failed(const std::string& err) {
         cudaStreamSynchronize(stream_);
         prefill_.reset();
+        ops_->release_prompt_workspace();
         short_prompt_ = false;
         std::string e;
         if (ExpertTier* t = ops_->expert_tier(e)) {
@@ -581,6 +582,7 @@ private:
         if (short_prompt_) return;
         cudaStreamSynchronize(stream_);
         prefill_.reset();
+        ops_->release_prompt_workspace();
         if (!t->reclaim(e)) basalt::log::warn("basalt deepseek41", "VRAM expert tier stays closed: %s", e.c_str());
         t->grow();
         t->report_slots("the read");

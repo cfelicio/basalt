@@ -2,6 +2,7 @@
 // (window ring, compressor, indexer, query path, sparse MQA, grouped output) with per-layer state owned here.
 #include "basalt/kernels/iq_kernels.hpp"
 #include "basalt/kernels/native_mmvq.hpp"
+#include "basalt/log.hpp"
 #include "basalt/platform/compiler.hpp"
 #include "basalt/platform/file.hpp"
 #include "basalt/models/deepseek41/attn.hpp"
@@ -326,6 +327,14 @@ public:
 
     bool compress_batch(int il, int64_t pos0, int n_tokens, const float* x, void* stream, std::string& err) override {
         return ensure_positions(pos0 + n_tokens, err) && ensure_batch(err) && batch_->compress_only(il, pos0, n_tokens, x, stream, err);
+    }
+
+    void release_prompt_workspace() override {
+        if (!batch_) return;
+        const uint64_t bytes = batch_->device_bytes();
+        batch_.reset();
+        basalt::log::info("basalt deepseek41", "prompt attention workspace released after the read (%.1f MiB returned)",
+                          (double) bytes / 1048576.0);
     }
 
     bool stage_token(int64_t pos, int T, void* stream, std::string& err) override {
@@ -699,7 +708,7 @@ public:
             }
         ExpertTier::Lookup lk;
         if (!tier_->lookup(il, uniq, nu, lk, err)) return false;
-        const int n_fetched = tier_->fetch(il, lk);
+        const int n_fetched = tier_->fetch(il, lk, /*transient=*/true);
         // the CPU's share starts first: it takes longest, and the pool's workers run it while the cards' shares launch
         bool cpu = false;
         for (int i = 0; i < nu; ++i) cpu = cpu || (!lk.dev[i] && !lk.peer[i]);
@@ -808,7 +817,7 @@ public:
         else cudaStreamSynchronize(st);
         ExpertTier::Lookup lk;
         if (!tier_->lookup(il, h_ids_, K, lk, err)) return false;
-        const int n_fetched = tier_->fetch(il, lk);
+        const int n_fetched = tier_->fetch(il, lk, /*transient=*/true);
         // the CPU's share starts first: it takes longest, and the pool's workers run it while the cards' shares launch
         bool cpu = false;
         for (int k = 0; k < K; ++k) cpu = cpu || (!lk.dev[k] && !lk.peer[k]);

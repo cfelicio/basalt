@@ -51,6 +51,8 @@ public:
         err = "deepseek41: this layer ops implementation has no batched compressor";
         return false;
     }
+    /// Drops the prompt-sized attention workspaces; the next prompt allocates them again. Decode does not use them.
+    virtual void release_prompt_workspace() {}
     /// The expert tier (VRAM slots and the pinned RAM copy), opened on first use; null when this implementation has none.
     virtual ExpertTier* expert_tier(std::string& err) { (void) err; return nullptr; }
     /// Backs the per-position state (the compressed caches) for positions below `positions`; the layer calls need it

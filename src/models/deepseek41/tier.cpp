@@ -33,6 +33,7 @@ constexpr uint64_t kPrereadBytes = 12ull << 30;  // file-backed experts read ahe
 
 // The usual routing order of this model's experts: the RAM and VRAM tiers start from the head of it.
 constexpr int kRankLayers = 40, kRankExperts = 384;
+constexpr int kScratchExperts = 3, kScratchSets = 2;   // claim-free decode staging: three blobs in each of two sets
 }  // namespace
 
 ExpertTier::ExpertTier(const DsModel& model) : m_(model) {}
@@ -56,6 +57,13 @@ ExpertTier::~ExpertTier() {
     }
     if (copy_stream_) cudaStreamSynchronize(copy_stream_);
     if (fetch_stream_) cudaStreamSynchronize(fetch_stream_);
+    if (scratch_) {   // a decode launch may still read it
+        cudaDeviceSynchronize();
+        for (cudaEvent_t& e : scratch_free_)
+            if (e) cudaEventDestroy(e);
+        cudaFree(scratch_);
+        scratch_ = nullptr;
+    }
     for (cudaEvent_t e : events_) cudaEventDestroy(e);
     if (fetch_ev_) cudaEventDestroy(fetch_ev_);
     if (gap_ev_) cudaEventDestroy(gap_ev_);
@@ -84,6 +92,31 @@ bool ExpertTier::open(const Reserve& reserve, float* h_rows, std::string& err) {
     if (!core::device_memory(-1, free_b, total_b, why)) {
         err = "deepseek41: cannot query the free device memory: " + why;
         return false;
+    }
+    if (m_.tiers().diag_pcie_scratch) {
+        for (const ExpertLayer& e : m_.pack().experts)
+            scratch_stride_ = std::max<uint64_t>(scratch_stride_, (e.blob_bytes + 255) / 256 * 256);
+        scratch_bytes_ = (uint64_t) kScratchSets * kScratchExperts * scratch_stride_;
+        if (scratch_bytes_ && cudaMalloc((void**) &scratch_, scratch_bytes_) != cudaSuccess) {
+            scratch_ = nullptr;
+            scratch_bytes_ = 0;
+            basalt::log::warn("basalt deepseek41", "PCIe expert scratch cannot allocate: %s", cudaGetErrorString(cudaGetLastError()));
+        }
+        if (scratch_bytes_) {
+            for (cudaEvent_t& e : scratch_free_)
+                if (cudaEventCreateWithFlags(&e, cudaEventDisableTiming) != cudaSuccess) {
+                    basalt::log::warn("basalt deepseek41", "PCIe expert scratch cannot create its events");
+                    for (cudaEvent_t& x : scratch_free_) {
+                        if (x) cudaEventDestroy(x);
+                        x = nullptr;
+                    }
+                    cudaFree(scratch_);
+                    scratch_ = nullptr;
+                    scratch_bytes_ = 0;
+                    break;
+                }
+        }
+        if (scratch_bytes_) free_b = free_b > scratch_bytes_ ? free_b - scratch_bytes_ : 0;
     }
     one_each_ = one_each;
     auto slots_in = [&](uint64_t room, uint64_t left_free) {
@@ -211,7 +244,6 @@ bool ExpertTier::open(const Reserve& reserve, float* h_rows, std::string& err) {
         events_.push_back(e);
         free_events_.push_back((int) i);
     }
-
     // the CPU side: the file view, the per-layer formats, the pool
     if (homes_.file > 0) {
         std::optional<platform::MappedFile> mf = platform::MappedFile::open_ro(m_.path(), &err);
@@ -247,6 +279,9 @@ bool ExpertTier::open(const Reserve& reserve, float* h_rows, std::string& err) {
                  cache_.gib(), (long long) per_layer_, n_expert_, 100.0 * (double) per_layer_ / n_expert_, pool_->workers());
     basalt::log::info("basalt deepseek41", "PCIe staging share %d%% of each pinned layer's misses (--diag-pcie-stage-share)",
                  m_.tiers().diag_pcie_stage_share >= 0 ? m_.tiers().diag_pcie_stage_share : policy::kBusSharePct);
+    if (scratch_bytes_)
+        basalt::log::info("basalt deepseek41", "PCIe expert scratch %d sets x %d experts, %.1f MiB (--diag-pcie-scratch)",
+                          kScratchSets, kScratchExperts, (double) scratch_bytes_ / 1048576.0);
     return true;
 }
 
@@ -875,6 +910,14 @@ int32_t ExpertTier::claim(int layer, int e, const uint8_t* src, cudaStream_t str
 }
 
 void ExpertTier::mark_gap(cudaStream_t main) {
+    if (scratch_set_used_ >= 0) {
+        const int set = scratch_set_used_;
+        if (cudaEventRecord(scratch_free_[(size_t) set], main) != cudaSuccess) {
+            cudaStreamSynchronize(main);   // the set is safe to reuse now, at the cost of this layer's overlap
+            scratch_busy_[(size_t) set] = false;
+        }
+        scratch_set_used_ = -1;
+    }
     gap_marked_ = (!queue_.empty() || !peer_queue_.empty()) && cudaEventRecord(gap_ev_, main) == cudaSuccess;
 }
 
@@ -918,7 +961,7 @@ void ExpertTier::pump(int pieces) {
 
 void ExpertTier::flush_queue() { pump(kAllPieces); }
 
-int ExpertTier::fetch(int layer, Lookup& lk) {
+int ExpertTier::fetch(int layer, Lookup& lk, bool transient) {
     if (m_.tiers().diag_tier_frozen) return 0;
     const bool registered = ram_registered(layer);
     // A locked-only span copies through the runtime's pageable staging; the CPU pool computes those misses instead.
@@ -929,6 +972,38 @@ int ExpertTier::fetch(int layer, Lookup& lk) {
     int left = policy::bus_count(np, nf, m_.tiers().diag_pcie_stage_share >= 0 ? m_.tiers().diag_pcie_stage_share
                                                                               : policy::kBusSharePct);
     int started = 0;
+    // A transient miss gets a scratch blob before the cache is asked for a slot, so the few warm slots keep their
+    // residents. The two sets alternate by layer; a set waits until `mark_gap` says the layer that used it is done.
+    if (transient && scratch_bytes_ && left > 0) {
+        const int set = layer & 1;
+        const uint64_t bytes = m_.pack().experts[(size_t) layer].blob_bytes;
+        int n = 0;
+        bool waited = false;
+        for (int i = lk.k - 1; i >= 0 && left > 0 && n < kScratchExperts; --i) {
+            if (lk.dev[i] || !pinned(layer, lk.experts[i])) continue;   // pinned sources only
+            if (scratch_busy_[(size_t) set]) {
+                if (cudaStreamWaitEvent(fetch_stream_, scratch_free_[(size_t) set], 0) != cudaSuccess) break;
+                scratch_busy_[(size_t) set] = false;
+            }
+            waited = true;
+            --left;
+            uint8_t* const dst = scratch_ + ((size_t) set * kScratchExperts + (size_t) n) * scratch_stride_;
+            cudaMemcpyAsync(dst, lk.host[i], bytes, cudaMemcpyHostToDevice, fetch_stream_);
+            lk.dev[i] = dst;
+            lk.host[i] = nullptr;
+            lk.fetched[i] = true;
+            --cpu_;
+            ++fetched_;
+            ++started;
+            ++scratch_fetched_;
+            ++(registered ? staged_pinned_ : staged_locked_);
+            ++n;
+        }
+        if (waited) {
+            scratch_busy_[(size_t) set] = true;
+            scratch_set_used_ = set;
+        }
+    }
     for (int i = lk.k - 1; i >= 0 && left > 0; --i) {
         if (lk.dev[i] || !pinned(layer, lk.experts[i])) continue;   // pinned sources only
         --left;
@@ -1082,6 +1157,9 @@ void ExpertTier::report(const char* tag) const {
                  (long long) n, 100.0 * (double) hits_ / (double) n, 100.0 * (double) peer_hits_ / (double) n, 100.0 * (double) fetched_ / (double) n,
                  100.0 * (double) cpu_ / (double) n, 100.0 * (double) file_hits_ / (double) n, (long long) promoted_, (long long) dropped_, (long long) swapped_,
                  (long long) staged_pinned_, (long long) staged_locked_);
+    if (scratch_fetched_)
+        basalt::log::info("basalt deepseek41", "TIER %s: %lld of the bus-copied lookups used the claim-free scratch ring",
+                          tag, (long long) scratch_fetched_);
 }
 
 }  // namespace basalt::models::deepseek41

@@ -110,6 +110,7 @@ public:
         else if (a == "--diag-tier-frozen") o.diag_tier_frozen = true;
         else if (a == "--diag-staging-pinned-only") o.staging_pinned_only = true;
         else if (a == "--diag-pcie-stage-share") o.diag_pcie_stage_share = std::atoi(args.next("--diag-pcie-stage-share"));
+        else if (a == "--diag-pcie-scratch") o.diag_pcie_scratch = true;
         else if (a == "--draft-log") basalt::core::diagnostics().draft_log = args.next("--draft-log");
         else return false;
         return true;

@@ -96,6 +96,7 @@ struct CommonOptions {
     /// --diag-pcie-stage-share PCT: the share of a pinned layer's misses the bus may stage (0-100; -1 keeps the
     /// policy's 50%); file-backed misses always stay with the CPU pool.
     int diag_pcie_stage_share = -1;
+    bool diag_pcie_scratch = false;        ///< --diag-pcie-scratch: decode stages cache misses through a claim-free ring
     std::string diag_dump;                 ///< --diag-dump DIR: a model's per-layer tensors, off by default
     int diag_tier_ram = -1, diag_tier_vram = -1;   ///< --diag-tier-ram / --diag-tier-vram: fixed expert-tier sizes
     bool diag_serial_prompt = false;       ///< --diag-serial-prompt: an adapter model reads its prompt one decode step at a time

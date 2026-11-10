@@ -44,6 +44,7 @@ Binary: **CLI** = `bin/basalt` one-shot (`--tokens IDS`), **serve** = `--serve` 
 | `--diag-tier-frozen` | CLI, serve | DeepSeek: fixed placement (no copies or promotion). |
 | `--diag-staging-pinned-only` | CLI, serve | DeepSeek: a layer the driver would not CUDA-register sends every miss to the CPU pool; no pageable H2D staging. |
 | `--diag-pcie-stage-share PCT` | CLI, serve | DeepSeek: the bus stages `PCT` (0-100) of each pinned layer's misses; the policy default is 50 (the historical half), and 100 offers every pinned miss. |
+| `--diag-pcie-scratch` | CLI, serve | DeepSeek decode: up to three misses per layer stream through a claim-free, two-set scratch ring instead of evicting a cache slot; a layer waits on the set it reuses. |
 | `--diag-drafter-gpu DEV` | CLI, serve | DeepSeek: the card the drafter runs on. |
 | `--force-zero-doorbell` | serve | Scheduling test on a card that cannot hold every expert. The output is wrong by design. |
 

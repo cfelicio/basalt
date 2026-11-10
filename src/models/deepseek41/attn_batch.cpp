@@ -98,6 +98,8 @@ public:
         return true;
     }
 
+    uint64_t device_bytes() const override { return bytes_; }
+
     bool compress_only(int il, int64_t pos0, int T, const float* x, void* stream, std::string& err) override {
         if (pos0 + T > max_pos_ || T > cap_) {
             err = "deepseek41: the chunk exceeds the compressed cache capacity";
@@ -343,6 +345,7 @@ private:
         void* v = nullptr;
         if (cudaMalloc(&v, bytes) != cudaSuccess) return false;
         cudaMemset(v, 0, bytes);
+        bytes_ += bytes;
         allocs_.push_back(v);
         *p = (P*) v;
         return true;
@@ -357,6 +360,7 @@ private:
     Fixed fixed_[2];
     void* stage_ = nullptr;
     std::vector<void*> allocs_;
+    uint64_t bytes_ = 0;
     void *xq_ = nullptr, *cws_ = nullptr, *iws_ = nullptr;
     float *kvraw_ = nullptr, *qr_ = nullptr, *q_ = nullptr, *attn_ = nullptr, *oa_ = nullptr, *mws_ = nullptr;
     int32_t *d_pos_ = nullptr, *d_start_ = nullptr, *d_n_ = nullptr, *d_lim_[2] = {nullptr, nullptr}, *ids_ = nullptr,

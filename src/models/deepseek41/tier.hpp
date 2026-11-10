@@ -120,9 +120,10 @@ public:
     void pump(int pieces);
     static constexpr int kAllPieces = 1 << 20;
     /// Starts the bus copy of the pinned misses of `lk` beyond the CPU's half (policy::bus_count) into the VRAM tier; those
-    /// experts get a device blob in `lk`, marked `fetched`, so the GPU computes them while the CPU does the rest. How many
-    /// started; `await_fetch` makes `main` wait for them.
-    int fetch(int layer, Lookup& lk);
+    /// experts get a device blob in `lk`, marked `fetched`, so the GPU computes them while the CPU does the rest. With
+    /// `transient`, misses that do not take a cache slot first use the claim-free scratch ring. How many started;
+    /// `await_fetch` makes `main` wait for them.
+    int fetch(int layer, Lookup& lk, bool transient = false);
     void await_fetch(cudaStream_t main);
     /// Queues the pinned misses the CPU computed that missed before within kPromoteWindow tokens for a copy into the
     /// VRAM tier (side stream, off the token path, in pieces).
@@ -293,6 +294,13 @@ private:
 
     int64_t hits_ = 0, cpu_ = 0, ram_hits_ = 0, promoted_ = 0, fetched_ = 0, dropped_ = 0, peer_hits_ = 0, file_hits_ = 0;
     int64_t staged_pinned_ = 0, staged_locked_ = 0;   ///< fetched copies from CUDA-registered and locked-only spans
+    int64_t scratch_fetched_ = 0;                     ///< of `fetched_`, the claim-free scratch ring's copies
+    uint8_t* scratch_ = nullptr;                      ///< two layers' worth of transient expert blobs
+    uint64_t scratch_bytes_ = 0;                      ///< the whole ring
+    uint64_t scratch_stride_ = 0;                     ///< one aligned expert blob
+    cudaEvent_t scratch_free_[2] = {};                ///< the main stream finished with each set
+    bool scratch_busy_[2] = {};                        ///< the set's compute may still read it
+    int scratch_set_used_ = -1;                        ///< the set this layer copied into, or -1
 };
 
 }  // namespace basalt::models::deepseek41
