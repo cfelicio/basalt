@@ -86,11 +86,11 @@ inline int64_t grow_slots(uint64_t free_bytes, uint64_t room, uint64_t floor, ui
     return slots_beside(free_bytes, room + floor, one_each, limit - per_layer);
 }
 
-/// Slots per layer a lent arena opens again with: all `lent` when they fit above the reserve, else what fits above the
+/// Slots per layer a lent arena opens again with: whatever fits above the reserve, else what fits above the
 /// tier's own room and the reserve.
 inline int64_t reclaim_slots(uint64_t free_bytes, uint64_t room, uint64_t floor, uint64_t one_each, int64_t lent) {
     const int64_t whole = slots_beside(free_bytes, floor, one_each, lent);
-    return whole == lent ? lent : slots_beside(free_bytes, room + floor, one_each, lent);
+    return whole > 0 ? whole : slots_beside(free_bytes, room + floor, one_each, lent);
 }
 
 /// The pinned expert of a layer to give up: the least recently used one not in `busy[0..n_busy)`; ties to the lowest id.

@@ -35,7 +35,7 @@
 namespace basalt::models::deepseek41 {
 namespace {
 constexpr int kLendTierTokens = 4096;   // a prompt this long reads without the VRAM tier, in larger chunks
-constexpr int kStepTailTokens = 256;     // a tail this short may read one decode step at a time when no workspaces fit
+constexpr int kStepTailTokens = 16;     // a tail shorter than this reads one decode step at a time when no workspaces fit
 
 #define DS_CUDA(call)                                                                                   \
     do {                                                                                                \
@@ -244,8 +244,8 @@ public:
                 // the caches take their memory before the prompt workspaces do
                 if (!ops_->ensure_positions(r.pos + r.n_tokens, err)) return prompt_failed(err);
                 if (!prefill_ && !make_prefill_fit(plan_tokens, err)) {
-                    // a long context's caches left no room: a short tail takes the decode path, a longer read the tier's memory
-                    if (r.n_tokens <= kStepTailTokens) {
+                    // a long context's caches left no room: a short tail (< 16 tokens) takes the decode path, a longer read the tier's memory
+                    if (r.n_tokens < kStepTailTokens) {
                         close_prompt_path();
                         for (int i = 0; i < r.n_tokens; ++i)
                             if (!step(r.tokens + i, 1, r.pos + i, false, nullptr, nullptr, err)) return {model::Status::Error, err};
@@ -521,7 +521,11 @@ private:
         const bool beside = short_prompt_;
         const uint64_t margin = std::max(beside ? prefillp::kShortMargin : prefillp::kMargin, tier ? tier->free_floor() : 0);
         if (beside) tokens = prefillp::kShortChunk;   // these workspaces stay for the next short read, whatever its size
-        const prefillp::Fit fit = prefillp::plan_chunk(d, free_b, margin, tokens);
+        int max_chunk = prefillp::kMaxChunk;
+        if (total_b && total_b <= (17ull << 30)) {
+            max_chunk = std::min(max_chunk, 2048);
+        }
+        const prefillp::Fit fit = prefillp::plan_chunk(d, free_b, margin, tokens, max_chunk);
         if (!fit.chunk) {
             err = "deepseek41: " + fit.error;
             return false;
@@ -574,18 +578,18 @@ private:
         prefill_.reset();
         short_prompt_ = false;
     }
-    // A short read's workspaces stay for the next one: the tier planned for them.
+    // Prompt workspaces are released after the read so the expert tier reclaims and grows to full decode capacity.
     void close_prompt_path() {
-        std::string e;
-        ExpertTier* t = ops_->expert_tier(e);
-        if (!t) return;
-        if (short_prompt_) return;
         cudaStreamSynchronize(stream_);
         prefill_.reset();
         ops_->release_prompt_workspace();
-        if (!t->reclaim(e)) basalt::log::warn("basalt deepseek41", "VRAM expert tier stays closed: %s", e.c_str());
-        t->grow();
-        t->report_slots("the read");
+        short_prompt_ = false;
+        std::string e;
+        if (ExpertTier* t = ops_->expert_tier(e)) {
+            if (!t->reclaim(e)) basalt::log::warn("basalt deepseek41", "VRAM expert tier stays closed: %s", e.c_str());
+            t->grow();
+            t->report_slots("the read");
+        }
     }
 
     // A chunk hands the drafter the target features of its last rows: the window a draft after it attends.

@@ -1225,7 +1225,7 @@ class GpuChoice(unittest.TestCase):
         self.assertIsNone(vision_item(None, {}))
         self.assertEqual(vision_item({"gpu": False, "mode": "cpu"}, {}), "vision=cpu")
         self.assertEqual(vision_item({"gpu": True, "mode": "1"}, {"gpu": "0,1"}), "vision=gpu1")
-        self.assertEqual(vision_item({"gpu": True, "mode": "dynamic"}, {"gpu": "0,1"}), "vision=gpu0")
+        self.assertEqual(vision_item({"gpu": True, "mode": "dynamic"}, {"gpu": "0,1"}), "vision=dynamic")
 
     def test_vision_device(self):
         from serve.engine.vision import child_env, vision_card, vision_env

@@ -83,7 +83,11 @@ std::optional<int> parse_options(int argc, char** argv, CommonOptions& o, const 
         }
         else if (a == "--stop-eos") o.stop_eos = true;
         else if (a == "--serve") o.serve = true;
-        else if (a == "--vision") { o.vision = true; o.vision_in_engine = true; }
+        else if (a == "--vision") {
+            o.vision = true;
+            o.vision_in_engine = true;
+            if (i + 1 < argc && std::string(argv[i + 1]) == "dynamic") ++i;
+        }
         else if (a == "--vision-external") o.vision = true;
         else if (a == "--prompt-cache") o.prompt_cache = std::max(0, std::atoi(next("--prompt-cache")));
         else if (a == "--conversation-cache-dir") o.conversation_cache_dir = next("--conversation-cache-dir");

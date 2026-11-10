@@ -4,6 +4,7 @@ rem settings and starts the server. Running it again starts the server. An NVIDI
 rem card (RTX 50 series, RTX PRO Blackwell) is all that has to be installed on the machine.
 rem   START-HERE.bat --plan    print every step and change nothing
 rem   START-HERE.bat --yes     take the shown default for every question
+rem   START-HERE.bat --config <file>  serve with an existing configuration file
 setlocal
 rem Python reads and writes text as UTF-8 and not in the machine's code page, so a folder or user name with
 rem accents, Cyrillic or CJK characters survives (a model path typed by a user arrives the same way).

@@ -33,7 +33,7 @@ constexpr uint64_t kPrereadBytes = 12ull << 30;  // file-backed experts read ahe
 
 // The usual routing order of this model's experts: the RAM and VRAM tiers start from the head of it.
 constexpr int kRankLayers = 40, kRankExperts = 384;
-constexpr int kScratchExperts = 3, kScratchSets = 2;   // claim-free decode staging: three blobs in each of two sets
+constexpr int kScratchExperts = 1, kScratchSets = 2;   // claim-free decode staging: 1 blob in each of two sets
 }  // namespace
 
 ExpertTier::ExpertTier(const DsModel& model) : m_(model) {}
@@ -974,7 +974,8 @@ int ExpertTier::fetch(int layer, Lookup& lk, bool transient) {
     int started = 0;
     // A transient miss gets a scratch blob before the cache is asked for a slot, so the few warm slots keep their
     // residents. The two sets alternate by layer; a set waits until `mark_gap` says the layer that used it is done.
-    if (transient && scratch_bytes_ && left > 0) {
+    // Pinned/registered sources only: an unpinned layer's misses never copy through the scratch ring.
+    if (transient && scratch_bytes_ && left > 0 && registered) {
         const int set = layer & 1;
         const uint64_t bytes = m_.pack().experts[(size_t) layer].blob_bytes;
         int n = 0;

@@ -443,8 +443,21 @@ def engine_defaults(model: Path | None) -> dict:
     tunes the KV cache and expert residency; DeepSeek-V4.1-Flash is fp16-KV-only and has no residency or
     relaxed-drafting flags, so it gets the expert-slot cap and the engine's own defaults."""
     if is_deepseek(model):
-        return {"expert-cache": "auto"}
-    return {"expert-cache": "auto", "prefill": "auto", "kv": "int8", "resident-experts": True}
+        return {
+            "expert-cache": "auto",
+            "diag-pcie-scratch": False,
+            "diag-staging-pinned-only": True,
+            "diag-pcie-stage-share": 50,
+        }
+    return {
+        "expert-cache": "auto",
+        "prefill": "auto",
+        "kv": "int8",
+        "resident-experts": True,
+        "diag-pcie-scratch": False,
+        "diag-staging-pinned-only": True,
+        "diag-pcie-stage-share": 50,
+    }
 
 
 def read_config(root: Path) -> dict:
@@ -502,7 +515,9 @@ def merge_config(cfg: dict, root: Path, model: Path | None, gpu: str, port: int,
         lead = [e for e in entries if str(e.get("model", "")).replace("\\", "/") == rel]
         entries = lead + [e for e in entries if e not in lead]
         if not lead:
-            entries.insert(0, {"model": rel})
+            entries.insert(0, {"model": rel, "vision": "dynamic"})
+        elif "vision" not in entries[0]:
+            entries[0]["vision"] = "dynamic"
     if gpu and entries:
         entries[0]["gpu"] = gpu
     if port:
@@ -541,6 +556,7 @@ def main() -> int:
     ap.add_argument("--model", default="", help="a pack name, a path to a .basalt file, 'local', 'default' or 'skip'")
     ap.add_argument("--gpu", default="", help="the cards, as '0' or '0,1' (the second is an expert tier)")
     ap.add_argument("--port", type=int, default=0, help="the port to serve on (default 8080)")
+    ap.add_argument("--config", default="", help="path to a config JSON file (e.g. config.epyc7443.json)")
     ap.add_argument("--engine-bin", default="", help="the engine binary, if it is not bin/basalt.exe")
     ap.add_argument("--build", action="store_true", help="build from source when the engine is missing")
     ap.add_argument("--no-download", action="store_true", help="never download the engine zip")
@@ -636,18 +652,20 @@ def main() -> int:
     if note:
         say("config", note)
     cfg = merge_config(existing, ROOT, model, gpu, port, defaults)
-    if plan:
-        say("config", "would write basalt_config.json: " + json.dumps(cfg, ensure_ascii=False))
-    else:
-        f = ROOT / "basalt_config.json"
-        if replaced and f.is_file():
-            f.replace(f.with_name(f.name + ".bak"))
-            say("config", f"the config that would not migrate is kept as {f.name}.bak")
-        write_config(ROOT, cfg)
+    cfg_file = Path(args.config) if args.config else (ROOT / "basalt_config.json")
+    if not args.config:
+        if plan:
+            say("config", "would write basalt_config.json: " + json.dumps(cfg, ensure_ascii=False))
+        else:
+            f = ROOT / "basalt_config.json"
+            if replaced and f.is_file():
+                f.replace(f.with_name(f.name + ".bak"))
+                say("config", f"the config that would not migrate is kept as {f.name}.bak")
+            write_config(ROOT, cfg)
 
     # 6. serve
     engine_shown = engine or ROOT / "bin" / ENGINE_EXE
-    cmd = [str(engine_shown), "serve", "--config", str(ROOT / "basalt_config.json")]
+    cmd = [str(engine_shown), "serve", "--config", str(cfg_file)]
     print()
     if model:
         print("  The engine places the experts in VRAM, in the peer card and in RAM at start, and prints what it did.")

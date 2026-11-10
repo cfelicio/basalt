@@ -190,10 +190,10 @@ int main() {
         CHECK(grow_slots(3000, room, 0, one, 12, 384, 10) == 0);
         CHECK(grow_slots(100000, room, 0, one, 4, 16, -1) == 12);
         CHECK(reclaim_slots(3000, room, 0, one, 8) == 8);
-        CHECK(reclaim_slots(3000, room, 2300, one, 8) == 0);
+        CHECK(reclaim_slots(3000, room, 2300, one, 8) == 7);
         CHECK(reclaim_slots(3000, room, 2200, one, 8) == 8);
-        CHECK(reclaim_slots(3000, room, 1500, one, 30) == 5);
-        CHECK(reclaim_slots(3000, room, 2500, one, 30) == 0);
+        CHECK(reclaim_slots(3000, room, 1500, one, 30) == 15);
+        CHECK(reclaim_slots(3000, room, 3000, one, 30) == 0);
     }
 
     if (g_fail) return 1;
