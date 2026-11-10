@@ -35,16 +35,20 @@ int main() {
         CHECK(period == 40 ? admitted > 0 : admitted == 0);
     }
 
-    // CPU-first split: at the default 50% share the CPU keeps half (rounded up), the file-backed misses stay with it
-    CHECK(bus_count(0, 0) == 0);
-    CHECK(bus_count(1, 0) == 0);
-    CHECK(bus_count(2, 0) == 1);
-    CHECK(bus_count(3, 0) == 1);
-    CHECK(bus_count(4, 0) == 2);
-    CHECK(bus_count(2, 1) == 1);
-    CHECK(bus_count(1, 2) == 1);
+    // the previous half policy, spelled out: the CPU keeps half (rounded up), and file-backed misses stay with it
+    CHECK(bus_count(0, 0, 50) == 0);
+    CHECK(bus_count(1, 0, 50) == 0);
+    CHECK(bus_count(2, 0, 50) == 1);
+    CHECK(bus_count(3, 0, 50) == 1);
+    CHECK(bus_count(4, 0, 50) == 2);
+    CHECK(bus_count(2, 1, 50) == 1);
+    CHECK(bus_count(1, 2, 50) == 1);
+    CHECK(bus_count(3, 3, 50) == 3);
+    // this branch's default stages every pinned miss; a named share scales the bus's part, never taking a file-backed
+    // miss and never more than the pinned misses
+    CHECK(bus_count(4, 0) == 4);
     CHECK(bus_count(3, 3) == 3);
-    // a named share scales the bus's part, never taking a file-backed miss and never more than the pinned misses
+    CHECK(bus_count(1, 5) == 1);
     CHECK(bus_count(4, 0, 0) == 0);
     CHECK(bus_count(4, 0, 25) == 1);
     CHECK(bus_count(4, 0, 50) == 2);
@@ -55,8 +59,9 @@ int main() {
     CHECK(bus_count(0, 4, 100) == 0);
     CHECK(bus_count(4, 4, 75) == 4);
     CHECK(bus_count(2, 2, 25) == 1);
-    CHECK(bus_count(4, 0, -1) == bus_count(4, 0, 0));   // a negative share clamps to 0; the tier resolves its -1 to 50
+    CHECK(bus_count(4, 0, -1) == bus_count(4, 0, 0));   // a negative share clamps to 0; the tier resolves its -1 to the policy
     CHECK(bus_count(4, 0, 101) == bus_count(4, 0, 100));
+    CHECK(bus_count(6, 6) == 6 && bus_count(0, 6) == 0);
     for (int share : {0, 25, 50, 75, 100})
         for (int p = 0; p <= 6; ++p)
             for (int f = 0; f <= 6 - p; ++f) {

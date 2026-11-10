@@ -245,9 +245,8 @@ bool ExpertTier::open(const Reserve& reserve, float* h_rows, std::string& err) {
     program::warn_spill(spill(), peer_ ? "" : ", or --gpu 0,1");
     basalt::log::info("basalt deepseek41", "VRAM expert tier %.2f GiB, %lld of %d experts per layer (%.0f%%); CPU pool %d workers",
                  cache_.gib(), (long long) per_layer_, n_expert_, 100.0 * (double) per_layer_ / n_expert_, pool_->workers());
-    if (m_.tiers().diag_pcie_stage_share >= 0)
-        basalt::log::info("basalt deepseek41", "PCIe staging share %d%% of each pinned layer's misses (--diag-pcie-stage-share)",
-                     m_.tiers().diag_pcie_stage_share);
+    basalt::log::info("basalt deepseek41", "PCIe staging share %d%% of each pinned layer's misses (--diag-pcie-stage-share)",
+                 m_.tiers().diag_pcie_stage_share >= 0 ? m_.tiers().diag_pcie_stage_share : policy::kBusSharePct);
     return true;
 }
 

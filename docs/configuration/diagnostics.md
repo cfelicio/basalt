@@ -42,7 +42,7 @@ Binary: **CLI** = `bin/basalt` one-shot (`--tokens IDS`), **serve** = `--serve` 
 | `--spec-corrupt N` | CLI | Replace every Nth draft with a wrong token, to test rejection. |
 | `--diag-teacher` | CLI | DeepSeek with `--spec-oracle`: teacher-forces the file's tokens and counts differing picks. |
 | `--diag-tier-frozen` | CLI, serve | DeepSeek: fixed placement (no copies or promotion). |
-| `--diag-pcie-stage-share PCT` | CLI, serve | DeepSeek: the bus stages `PCT` (0-100) of each pinned layer's misses; 50 is the default split. |
+| `--diag-pcie-stage-share PCT` | CLI, serve | DeepSeek: the bus stages `PCT` (0-100) of each pinned layer's misses; the policy default is 100 (every pinned miss), and 50 is the previous half. |
 | `--diag-drafter-gpu DEV` | CLI, serve | DeepSeek: the card the drafter runs on. |
 | `--force-zero-doorbell` | serve | Scheduling test on a card that cannot hold every expert. The output is wrong by design. |
 
