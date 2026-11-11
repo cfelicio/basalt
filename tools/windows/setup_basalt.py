@@ -443,11 +443,7 @@ def engine_defaults(model: Path | None) -> dict:
     tunes the KV cache and expert residency; DeepSeek-V4.1-Flash is fp16-KV-only and has no residency or
     relaxed-drafting flags, so it gets the expert-slot cap and the engine's own defaults."""
     if is_deepseek(model):
-        return {
-            "expert-cache": "auto",
-            "diag-staging-pinned-only": True,
-            "diag-pcie-stage-share": 50,
-        }
+        return {"expert-cache": "auto"}
     return {
         "expert-cache": "auto",
         "prefill": "auto",
