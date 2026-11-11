@@ -16,7 +16,7 @@
 param(
     [string]$BasePath = "F:\basalt",
     [string]$ModelPath = "",
-    [int]$ExpertCache = 58,
+    [string]$ExpertCache = "auto",
     [int]$PoolWorkers = 24,
     [string]$PowerLabel = "300W",
     [int]$CooldownSeconds = 5
@@ -203,9 +203,10 @@ function Start-BasaltServer {
     $ready = $false
     for ($i = 0; $i -lt 40; $i++) {
         Start-Sleep -Milliseconds 750
+        $proc.Refresh()
         if ($proc.HasExited) {
             Write-Host "[ERROR] Basalt server process exited prematurely with code $($proc.ExitCode)!" -ForegroundColor Red
-            break
+            return $null
         }
         try {
             $test = Invoke-WebRequest -Uri "http://127.0.0.1:8080/v1/models" -Method Get -TimeoutSec 1 -ErrorAction SilentlyContinue
@@ -214,6 +215,8 @@ function Start-BasaltServer {
     }
     if (-not $ready) {
         Write-Host "[WARNING] Server failed to answer on 8080 within 30s." -ForegroundColor Red
+        Stop-BasaltServer -Process $proc
+        return $null
     }
     return $proc
 }
@@ -282,7 +285,7 @@ if ($Builds["Baseline"] -and $Builds["PR321"]) {
             $fixturesDir = Join-Path $buildRoot "data\bench"
         }
 
-        $benchArgsStr = "--model `"$ModelPath`" --fixtures `"$fixturesDir`" --engine `"$engineExe`" --seed 42 -t conv,struct,prose -o md --power-label `"$PowerLabel`" -- --kv fp8 --spec 3 --pool-workers $PoolWorkers --expert-cache $ExpertCache"
+        $benchArgsStr = "--model `"$ModelPath`" --fixtures `"$fixturesDir`" --engine `"$engineExe`" --seed 42 -t conv,struct,prose -o md --power-label `"$PowerLabel`" -- --kv fp8 --spec 3 --pool-workers $PoolWorkers --expert-cache $ExpertCache --vram-reserve-mib 384"
         Write-Host "Executing: $benchExe $benchArgsStr" -ForegroundColor Gray
 
         $stdoutFile = [System.IO.Path]::GetTempFileName()
@@ -290,6 +293,7 @@ if ($Builds["Baseline"] -and $Builds["PR321"]) {
 
         $p = Start-Process -FilePath $benchExe -ArgumentList $benchArgsStr -WorkingDirectory $buildRoot -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile -PassThru -NoNewWindow
         $p.WaitForExit()
+        $p.Refresh()
 
         $stdout = if (Test-Path $stdoutFile) { Get-Content $stdoutFile -Raw } else { "" }
         $stderr = if (Test-Path $stderrFile) { Get-Content $stderrFile -Raw } else { "" }
@@ -346,8 +350,10 @@ if ($Builds["Baseline"] -and $Builds["PR320"]) {
             @{ alias = "DeepSeek-V4.1-Flash"; model = $ModelPath; gpu = "0"; vision = "dynamic" }
         )
     } | ConvertTo-Json -Depth 10
+
     $configFilePath = Join-Path $BasePath "config.test.json"
-    $testConfig | Set-Content $configFilePath -Encoding UTF8
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($configFilePath, $testConfig, $utf8NoBom)
 
     $block = @"
 public class DataRecord {
@@ -374,6 +380,10 @@ public class DataRecord {
     foreach ($run in $tailSequence) {
         Write-Host "`n--- Testing $($run.Label) ---" -ForegroundColor Yellow
         $serverProc = Start-BasaltServer -BinDir $run.Bin -ConfigPath $configFilePath -PythonExe $pyInterpreter
+        if (-not $serverProc) {
+            Write-Host "[ERROR] Could not start server for $($run.Label). Skipping." -ForegroundColor Red
+            continue
+        }
         Start-Sleep -Seconds 3
 
         # Turn 1
@@ -382,6 +392,11 @@ public class DataRecord {
             @{ role = "user"; content = $codePrefix + "`n`nIn one sentence, what does ComputeScore do?" }
         )
         $r1 = Invoke-Chat -Messages $msgs -MaxTokens 32
+        if (-not $r1.Success) {
+            Write-Host "  Turn 1 Failed: $($r1.Error)" -ForegroundColor Red
+            Stop-BasaltServer -Process $serverProc
+            continue
+        }
         Write-Host "  Turn 1 (~6.5k prefix) Elapsed: $($r1.ElapsedMs) ms" -ForegroundColor Gray
 
         # Turn 2: Incremental tail (~85 fresh tokens)
@@ -389,6 +404,11 @@ public class DataRecord {
         $msgs += @{ role = "user"; content = "Write a short unit test function in C# that tests ComputeScore with an array of 1.0, 2.0, 3.0 and weight 2.0, asserting the expected value." }
         
         $r2 = Invoke-Chat -Messages $msgs -MaxTokens 64
+        if (-not $r2.Success) {
+            Write-Host "  Turn 2 Failed: $($r2.Error)" -ForegroundColor Red
+            Stop-BasaltServer -Process $serverProc
+            continue
+        }
         Write-Host "  Turn 2 (Incremental Tail) Elapsed: $($r2.ElapsedMs) ms" -ForegroundColor Green
 
         $Results["PR320_ABBA"] += [PSCustomObject]@{
@@ -426,6 +446,10 @@ if ($Builds["Baseline"] -and $Builds["PR322"]) {
     foreach ($run in $mtSequence) {
         Write-Host "`n--- Multi-Turn Testing $($run.Label) ---" -ForegroundColor Yellow
         $serverProc = Start-BasaltServer -BinDir $run.Bin -ConfigPath $configFilePath -PythonExe $pyInterpreter
+        if (-not $serverProc) {
+            Write-Host "[ERROR] Could not start server for $($run.Label). Skipping." -ForegroundColor Red
+            continue
+        }
         Start-Sleep -Seconds 3
 
         $messages = @(
