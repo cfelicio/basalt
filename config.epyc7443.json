@@ -1,9 +1,12 @@
 {
   "version": 2,
-  "server": { "host": "127.0.0.1", "port": 8080 },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080
+  },
   "engine": {
     "ram-reserve-mib": 2048,
-    "max-context": 262144,
+    "max-context": 131072,
     "kv": "fp8",
     "expert-cache": "auto",
     "spec": 3,
