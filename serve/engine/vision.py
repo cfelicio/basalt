@@ -460,6 +460,5 @@ def vision_item(vision: dict | None, cfg: dict) -> str | None:
     if gpu is not None:
         return f"vision=gpu{gpu}"
     if vision.get("mode") == "dynamic":
-        listed = gpu_list(cfg)
-        return f"vision=gpu{listed[0] if listed else 0}"
+        return "vision=dynamic"
     return "vision=cpu"

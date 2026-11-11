@@ -7,6 +7,9 @@ name: release-windows
 # ci.yml on every pull request (Linux and Windows); this workflow only packages.
 on:
   push:
+    branches:
+      - main
+      - clean-v0.3.2-production
     tags:
       - "v*"
   workflow_dispatch:
@@ -52,6 +55,7 @@ jobs:
           arch: x64
 
       - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        continue-on-error: true      # the cache is a speed-up; a failed ccache download must not stop the build
         with:
           key: release-windows-${{ hashFiles('CMakeLists.txt') }}
           restore-keys: windows-2022-
@@ -78,15 +82,18 @@ jobs:
           echo "building $v${tag:+ for release $tag}"
 
       - name: Configure
-        run: >
-          cmake -S . -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DBUILD_TESTING=OFF
-          -DCMAKE_CUDA_ARCHITECTURES=${ARCH}
-          -DCMAKE_C_COMPILER_LAUNCHER=ccache
-          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
-          -DPython3_EXECUTABLE="$(python -c 'import sys;print(sys.executable.replace(chr(92),"/"))')"
+        run: |
+          launchers=()
+          if command -v ccache >/dev/null 2>&1; then
+            launchers=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                       -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache)
+          fi
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_CUDA_ARCHITECTURES=${ARCH} \
+            "${launchers[@]}" \
+            -DPython3_EXECUTABLE="$(python -c 'import sys;print(sys.executable.replace(chr(92),"/"))')"
 
       - name: Build
         run: cmake --build build -j "$(nproc)" -- -k 0

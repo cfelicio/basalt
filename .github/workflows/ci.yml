@@ -77,6 +77,7 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/toolchain
+        continue-on-error: true      # CUDA/MSVC are set first; a failed ccache download must not stop the build
         with:
           cuda-version: ${{ env.CUDA_VERSION }}
           cache-key: ${{ matrix.os }}
@@ -93,16 +94,19 @@ jobs:
       - name: Configure
         env:
           WERROR: ${{ runner.os == 'Linux' && 'ON' || 'OFF' }}
-        run: >
-          cmake -S . -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DWERROR="$WERROR"
-          -DBUILD_TESTING=ON
-          -DCMAKE_CUDA_ARCHITECTURES=120
-          -DCMAKE_C_COMPILER_LAUNCHER=ccache
-          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
-          -DPython3_EXECUTABLE="$(python -c 'import sys;print(sys.executable.replace(chr(92),"/"))')"
+        run: |
+          launchers=()
+          if command -v ccache >/dev/null 2>&1; then
+            launchers=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                       -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache)
+          fi
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWERROR="$WERROR" \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_CUDA_ARCHITECTURES=120 \
+            "${launchers[@]}" \
+            -DPython3_EXECUTABLE="$(python -c 'import sys;print(sys.executable.replace(chr(92),"/"))')"
 
       - name: Build
         run: cmake --build build -j "$(nproc)" -- -k 0

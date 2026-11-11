@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "server": { "host": "127.0.0.1", "port": 8080 },
+  "engine": {
+    "ram-reserve-mib": 2048,
+    "max-context": 262144,
+    "kv": "fp8",
+    "expert-cache": "auto",
+    "spec": 3,
+    "pool-workers": 24,
+    "prompt-cache": 32,
+    "conversation-cache-slots": 16,
+    "conversation-cache-min-free-mib": 2560,
+    "conversation-cache-disk-mib": 65536,
+    "vram-reserve-mib": 384,
+    "diag-staging-pinned-only": true,
+    "diag-pcie-stage-share": 50
+  },
+  "models": [
+    {
+      "alias": "DeepSeek-V4.1-Flash",
+      "model": "models/DeepSeek-V4.1-Flash-1017-UD-IQ2_XXS.basalt",
+      "gpu": "0",
+      "vision": "dynamic"
+    }
+  ]
+}
