@@ -84,6 +84,7 @@ public:
     /// Main card bytes the tier, the caches and the prompt path leave free: --vram-reserve-mib, or `mib` once set
     /// (`mib` < 0: back to the start's). The arena is not resized here.
     void set_free_floor(int64_t mib);
+    void report_slots(const char* when) const;
     uint64_t free_floor() const { return free_floor_; }
 
     /// Called before each token or window. The copies queued during the previous one (promotions, second card exchanges)
@@ -219,6 +220,7 @@ private:
     int64_t per_layer_ = 0;                 ///< VRAM slots each layer owns in the base arena
     core::ExpertCache ext_;                 ///< slots beside the base arena, open only while no prompt workspace is
     int64_t ext_per_layer_ = 0;             ///< slots each layer owns in `ext_`
+    int64_t startup_slots_ = -1;            ///< total slots (base + beside) at startup; caps post-read growth
     bool unread_said_ = false;              ///< `grow` has said that the runtime could not answer
     int64_t lent_per_layer_ = 0;            ///< base slots given up by lend_all(), 0 when none
     std::vector<int32_t> res_;              ///< [layer * n_expert + e] VRAM slot or -1
