@@ -510,7 +510,11 @@ private:
         const bool beside = short_prompt_;
         const uint64_t margin = std::max(beside ? prefillp::kShortMargin : prefillp::kMargin, tier ? tier->free_floor() : 0);
         if (beside) tokens = prefillp::kShortChunk;   // these workspaces stay for the next short read, whatever its size
-        const prefillp::Fit fit = prefillp::plan_chunk(d, free_b, margin, tokens);
+        int max_chunk = prefillp::kMaxChunk;
+        if (total_b && total_b <= (17ull << 30)) {
+            max_chunk = std::min(max_chunk, 2048);
+        }
+        const prefillp::Fit fit = prefillp::plan_chunk(d, free_b, margin, tokens, max_chunk);
         if (!fit.chunk) {
             err = "deepseek41: " + fit.error;
             return false;
