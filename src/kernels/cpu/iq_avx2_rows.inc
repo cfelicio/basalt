@@ -1,9 +1,12 @@
 // src/kernels/cpu/iq_avx2_rows.inc - the i-quant expert rows in 256-bit lanes, several tokens at once.
 //
-// Included by iq_avx2.cpp (BASALT_IQ_VNNI 0: `madd` and `add`) and iq_avx2_vnni.cpp (BASALT_IQ_VNNI 1: the AVX-VNNI
-// instruction that does both), which name the exported functions through BASALT_IQ_EXPORT.  BASALT_IQ_BMI2 1 builds the
-// IQ3_S and IQ2_S grid indices with `pdep`; the build without it keeps the scalar index arithmetic, since `pdep` is
-// slow on some AVX2 CPUs.
+// Included by iq_avx2.cpp (BASALT_IQ_VNNI 0: `madd` and `add`), iq_avx2_vnni.cpp (BASALT_IQ_VNNI 1: the AVX-VNNI
+// instruction that does both), and iq_avx2_bmi2.cpp (VNNI 0, BMI2 1), which name the exported functions through
+// BASALT_IQ_EXPORT.  BASALT_IQ_BMI2 1 builds the IQ2_XXS, IQ2_XS and IQ3_XXS sign masks with `pdep` (and `pext` for
+// IQ2_XS) instead of the sign tables, and the IQ3_S and IQ2_S grid indices with `pdep`; the build without it keeps
+// the table lookups and the scalar index arithmetic, since `pdep` is slow on some AVX2 CPUs (the probe is
+// cpu_pdep_ok, which excludes them).  BASALT_IQ_IQ4NL 0 leaves the IQ4_NL rows out: they hold no BMI2 path, so the
+// BMI2 build has nothing to gain from carrying them.
 // The AVX-512 kernels' (iq_avx512.cpp) multi-token scheme on the CPUs without AVX-512: each 32-value chunk is decoded once - grid lookups, one sign vector,
 // one scale vector - and every token of the verify window applies them with a load, a `sign`, a `maddubs`,
 // a `madd` and an `add`.  ggml-cpu's own AVX2 dot products for these formats are single-token: every token
@@ -38,6 +41,20 @@ inline __m256i sgn_vec(uint32_t m) {
     const __m256i nz = _mm256_cmpeq_epi8(_mm256_and_si256(bits, sel), sel);
     return _mm256_or_si256(nz, _mm256_set1_epi8(1));
 }
+
+#if BASALT_IQ_BMI2
+// ksigns_iq2xs[i] for eight 7-bit sign indices at once (iq_avx512.cpp's ksigns8): the table is i | parity(i) << 7.
+// `x` holds the indices back to back (index l in bits 7l..7l+6); byte l of the result is sign byte l, as the table
+// lookups place it.  The parity fold reads a byte's own bits into its bit 0 and only spills into higher bits, so the
+// four sign bytes are ready for sgn_vec without a single table load - the AVX-512 kernels' scheme on the 256-bit lanes.
+inline uint64_t ksigns8(uint64_t x) {
+    const uint64_t s = _pdep_u64(x, 0x7F7F7F7F7F7F7F7Full);
+    uint64_t p = s ^ (s >> 4);
+    p ^= p >> 2;
+    p ^= p >> 1;
+    return s | ((p & 0x0101010101010101ull) << 7);
+}
+#endif
 
 // The two 16-value scales of one 32-value half (IQ2_XS, IQ2_S): int16 lanes 0-7 = a (values 0-15),
 // 8-15 = b (values 16-31).  NOT a broadcast dword [a,b] - that would alternate the scales lane by lane.
@@ -123,8 +140,13 @@ template <> struct Fmt32<16> {   // IQ2_XXS: d, qs[32] u16
         const uint32_t w0 = u32(q), w1 = u32(q + 4);
         g = _mm256_set_epi64x((long long) iq2xxs_grid[w0 >> 24], (long long) iq2xxs_grid[(w0 >> 16) & 255],
                               (long long) iq2xxs_grid[(w0 >> 8) & 255], (long long) iq2xxs_grid[w0 & 255]);
+#if BASALT_IQ_BMI2
+        // the four 7-bit sign indices of w1 as four sign bytes, then the bit_selector expansion (no table loads)
+        sgn = sgn_vec((uint32_t) ksigns8(w1 & 0x0FFFFFFFu));
+#else
         sgn = _mm256_set_epi64x((long long) even_signs.v[(w1 >> 21) & 127], (long long) even_signs.v[(w1 >> 14) & 127],
                                 (long long) even_signs.v[(w1 >> 7) & 127], (long long) even_signs.v[w1 & 127]);
+#endif
         sc = sc32(2 * (int) (w1 >> 28) + 1);
     }
 };
@@ -175,8 +197,12 @@ template <> struct Fmt32<18> {   // IQ3_XXS: d, qs[64] grid bytes, 8 x u32 (4 x 
         g = _mm256_set_epi32((int) iq3xxs_grid[q[7]], (int) iq3xxs_grid[q[6]], (int) iq3xxs_grid[q[5]], (int) iq3xxs_grid[q[4]],
                              (int) iq3xxs_grid[q[3]], (int) iq3xxs_grid[q[2]], (int) iq3xxs_grid[q[1]], (int) iq3xxs_grid[q[0]]);
         const uint32_t w = u32(b + 2 + 64 + 8 * j + 4 * half);
+#if BASALT_IQ_BMI2
+        sgn = sgn_vec((uint32_t) ksigns8(w & 0x0FFFFFFFu));   // as in Fmt32<16>, one pdep and a parity
+#else
         sgn = _mm256_set_epi64x((long long) even_signs.v[(w >> 21) & 127], (long long) even_signs.v[(w >> 14) & 127],
                                 (long long) even_signs.v[(w >> 7) & 127], (long long) even_signs.v[w & 127]);
+#endif
         sc = sc32(2 * (int) (w >> 28) + 1);
     }
 };
@@ -344,10 +370,15 @@ inline void row_dot_iq3xxs(const uint8_t* row, int nblocks, const block_q8_K* co
                                                       _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i*) q)), 4);
             const __m256i g1 = _mm256_i32gather_epi32((const int*) iq3xxs_grid,
                                                       _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i*) (q + 8))), 4);
+#if BASALT_IQ_BMI2
+            const __m256i s0 = sgn_vec((uint32_t) ksigns8(w0 & 0x0FFFFFFFu));
+            const __m256i s1 = sgn_vec((uint32_t) ksigns8(w1 & 0x0FFFFFFFu));
+#else
             const __m256i s0 = _mm256_set_epi64x((long long) even_signs.v[(w0 >> 21) & 127], (long long) even_signs.v[(w0 >> 14) & 127],
                                                  (long long) even_signs.v[(w0 >> 7) & 127], (long long) even_signs.v[w0 & 127]);
             const __m256i s1 = _mm256_set_epi64x((long long) even_signs.v[(w1 >> 21) & 127], (long long) even_signs.v[(w1 >> 14) & 127],
                                                  (long long) even_signs.v[(w1 >> 7) & 127], (long long) even_signs.v[w1 & 127]);
+#endif
             group_tokens<NT>(acc, y, i, 64 * j, g0, s0, sc32(2 * (int) (w0 >> 28) + 1), g1, s1, sc32(2 * (int) (w1 >> 28) + 1));
         }
         block_finish<NT>(accf, acc, y, i, h2f(u16(blk)) * Fmt32<18>::K);
@@ -397,11 +428,14 @@ inline void row_dot_iq2s(const uint8_t* row, int nblocks, const block_q8_K* cons
 // ---- IQ2_XS (17) with ggml's vectorized sign decode (arch/x86/quants.c, ggml_vec_dot_iq2_xs_q8_K):
 // the 7-bit sign indices never touch ksigns_iq2xs - the 8th sign bit is reconstructed by parity (two
 // shifts, a xor and ggml's bit_helper pshufb) and the per-half sign vectors come out of shuffles of one
-// 32-byte load.  The 8 scale bytes become all 16 half-scales with ggml's unpack trick.  The grid lookups
+// 32-byte load.  The BMI2 build instead collects each half's four sign indices with pext and its four sign
+// bytes with ksigns8, exactly as the AVX-512 kernel's Fmt<17> does, and expands them with sgn_vec.
+// The 8 scale bytes become all 16 half-scales with ggml's unpack trick.  The grid lookups
 // stay scalar loads into set_epi64x (ggml does the same).  Every token still only pays a load, a sign,
 // a maddubs, a madd and an add per half, into alternating accumulators.
 template <int NT>
 inline void row_dot_iq2xs(const uint8_t* row, int nblocks, const block_q8_K* const* y, float* res) {
+#if !BASALT_IQ_BMI2
     static const uint8_t bit_sel[32] = {
         1, 2, 4, 8, 16, 32, 64, (uint8_t) 0x80, 1, 2, 4, 8, 16, 32, 64, (uint8_t) 0x80,
         1, 2, 4, 8, 16, 32, 64, (uint8_t) 0x80, 1, 2, 4, 8, 16, 32, 64, (uint8_t) 0x80 };
@@ -416,6 +450,7 @@ inline void row_dot_iq2xs(const uint8_t* row, int nblocks, const block_q8_K* con
         (uint8_t) 0x80, 0x00, 0x00, (uint8_t) 0x80, 0x00, (uint8_t) 0x80, (uint8_t) 0x80, 0x00,
         0x00, (uint8_t) 0x80, (uint8_t) 0x80, 0x00, (uint8_t) 0x80, 0x00, 0x00, (uint8_t) 0x80,
         (uint8_t) 0x80, 0x00, 0x00, (uint8_t) 0x80, 0x00, (uint8_t) 0x80, (uint8_t) 0x80, 0x00 };
+#endif
     static const uint8_t k_sc_shuffle[128] = {  // half h -> scale bytes 2h (lanes 0-7), 2h+1 (lanes 8-15)
         0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
         2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
@@ -425,13 +460,17 @@ inline void row_dot_iq2xs(const uint8_t* row, int nblocks, const block_q8_K* con
         10, 10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 11, 11,
         12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 13,
         14, 14, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15 };
+#if !BASALT_IQ_BMI2
     const __m256i bsel = _mm256_loadu_si256((const __m256i*) bit_sel);
     const __m256i shev = _mm256_loadu_si256((const __m256i*) shuf_even);
     const __m256i shod = _mm256_loadu_si256((const __m256i*) shuf_odd);
     const __m256i bhelp = _mm256_loadu_si256((const __m256i*) bit_help);
+#endif
     const __m256i m511 = _mm256_set1_epi16(511);
     const __m128i m4 = _mm_set1_epi8(0xf), m1 = _mm_set1_epi8(1);
+#if !BASALT_IQ_BMI2
     const __m256i one8 = _mm256_set1_epi8(1);
+#endif
 
     __m256 accf[NT];
     for (int t = 0; t < NT; ++t) accf[t] = _mm256_setzero_ps();
@@ -446,12 +485,14 @@ inline void row_dot_iq2xs(const uint8_t* row, int nblocks, const block_q8_K* con
         for (int t = 0; t < NT; ++t) acc[t][0] = acc[t][1] = _mm256_setzero_si256();
         for (int jj = 0; jj < 2; ++jj) {   // 128 values (16 u16) per step
             const __m256i q2 = _mm256_loadu_si256((const __m256i*) (blk + 2 + 32 * jj));
+#if !BASALT_IQ_BMI2
             const __m256i p7 = _mm256_srli_epi16(q2, 9);              // 7 sign bits per u16, even bytes
             const __m256i p3 = _mm256_srli_epi16(q2, 13);             // sign index bits 4-6
             const __m256i fsb = _mm256_or_si256(p7,
                 _mm256_shuffle_epi8(bhelp, _mm256_xor_si256(p7, p3)));  // + the parity sign bit 7
             const __m256i s01 = _mm256_broadcastsi128_si256(_mm256_castsi256_si128(fsb)); // u16 0-7
             const __m256i s23 = _mm256_broadcastsi128_si256(_mm256_extracti128_si256(fsb, 1)); // u16 8-15
+#endif
             alignas(32) uint16_t gi[16];
             _mm256_store_si256((__m256i*) gi, _mm256_and_si256(q2, m511));
             for (int h = 0; h < 4; ++h) {   // the four 32-value halves of this group
@@ -460,9 +501,16 @@ inline void row_dot_iq2xs(const uint8_t* row, int nblocks, const block_q8_K* con
                                                    (long long) iq2xs_grid[gi[4 * h + 2]],
                                                    (long long) iq2xs_grid[gi[4 * h + 1]],
                                                    (long long) iq2xs_grid[gi[4 * h]]);
+#if BASALT_IQ_BMI2
+                // the half's four sign indices out of its eight u16 bytes with pext (bits 9..15 each), the four
+                // sign bytes with ksigns8 - the AVX-512 Fmt<17> construction on scalar registers - and sgn_vec
+                const __m256i sgn = sgn_vec((uint32_t) ksigns8(
+                    _pext_u64(u64(blk + 2 + 32 * jj + 8 * h), 0xFE00FE00FE00FE00ull)));
+#else
                 const __m256i sb = _mm256_shuffle_epi8(h < 2 ? s01 : s23, (h & 1) ? shod : shev);
                 const __m256i sgn = _mm256_or_si256(
                     _mm256_cmpeq_epi8(_mm256_and_si256(sb, bsel), bsel), one8);
+#endif
                 const __m256i sc = _mm256_cvtepi8_epi16(
                     _mm_shuffle_epi8(scales, _mm_loadu_si128((const __m128i*) k_sc_shuffle + H)));
                 const int off = 128 * jj + 32 * h;
@@ -580,6 +628,7 @@ void dot_rows_nt(int nt, const uint8_t* w, size_t row_bytes, int n, const void* 
     }
 }
 
+#if BASALT_IQ_IQ4NL
 // ---- IQ4_NL (type 20): 32-value blocks of 18 bytes (f16 d + 16 nibble bytes) against Q8_0 activations.
 // ggml-cpu's own AVX-2 dot (ggml_vec_dot_iq4_nl_q8_0) is single-token: every token redoes the nibble ->
 // kvalues_iq4nl pshufb decode.  Here each block is decoded once for all tokens, and a pass takes several rows at once:
@@ -671,13 +720,9 @@ void iq4nl_rows(const uint8_t* w, size_t row_bytes, int n, const block_q8_0* con
     for (; r + R <= r1; r += R) iq4nl_pass<R, NT>(w + (size_t) r * row_bytes, row_bytes, nb, y, dy, seed, out, r, pf);
     for (; r < r1; ++r) iq4nl_pass<1, NT>(w + (size_t) r * row_bytes, row_bytes, nb, y, dy, seed, out, r, pf);
 }
+#endif  // BASALT_IQ_IQ4NL
 
 }  // namespace
-
-void BASALT_IQ_EXPORT(iq256_gu_rows)(int type, const uint8_t* blob, size_t gu_row, size_t up_off, int n, const void* const* act, int nt,
-                   float* const* ff, int r0, int r1) {
-    BASALT_IQ_EXPORT(iq256_gu_rows_mode)(rows_mode(), type, blob, gu_row, up_off, n, act, nt, ff, r0, r1);
-}
 
 void BASALT_IQ_EXPORT(iq256_gu_rows_mode)(int mode, int type, const uint8_t* blob, size_t gu_row, size_t up_off, int n,
                                           const void* const* act, int nt, float* const* ff, int r0, int r1) {
@@ -696,9 +741,9 @@ void BASALT_IQ_EXPORT(iq256_gu_rows_mode)(int mode, int type, const uint8_t* blo
     }
 }
 
-void BASALT_IQ_EXPORT(iq256_rows)(int type, const uint8_t* w, size_t row_bytes, int n, const void* const* act, int nt, float* const* out,
-                int r0, int r1) {
-    BASALT_IQ_EXPORT(iq256_rows_mode)(rows_mode(), type, w, row_bytes, n, act, nt, out, r0, r1);
+void BASALT_IQ_EXPORT(iq256_gu_rows)(int type, const uint8_t* blob, size_t gu_row, size_t up_off, int n, const void* const* act, int nt,
+                   float* const* ff, int r0, int r1) {
+    BASALT_IQ_EXPORT(iq256_gu_rows_mode)(rows_mode(), type, blob, gu_row, up_off, n, act, nt, ff, r0, r1);
 }
 
 void BASALT_IQ_EXPORT(iq256_rows_mode)(int mode, int type, const uint8_t* w, size_t row_bytes, int n, const void* const* act,
@@ -718,6 +763,12 @@ void BASALT_IQ_EXPORT(iq256_rows_mode)(int mode, int type, const uint8_t* w, siz
     }
 }
 
+void BASALT_IQ_EXPORT(iq256_rows)(int type, const uint8_t* w, size_t row_bytes, int n, const void* const* act, int nt, float* const* out,
+                int r0, int r1) {
+    BASALT_IQ_EXPORT(iq256_rows_mode)(rows_mode(), type, w, row_bytes, n, act, nt, out, r0, r1);
+}
+
+#if BASALT_IQ_IQ4NL
 void BASALT_IQ_EXPORT(iq4nl256_down_rows)(const uint8_t* w, size_t row_bytes, int n, const void* const* hq, int nt, float* const* out,
                         int r0, int r1) {
     // the tokens' block scales are held on the stack: rows of at most iq4nl_max_blocks blocks (iq4nl256_fits)
@@ -739,5 +790,6 @@ void BASALT_IQ_EXPORT(iq4nl256_down_rows)(const uint8_t* w, size_t row_bytes, in
         }
     }
 }
+#endif  // BASALT_IQ_IQ4NL
 
 }  // namespace basalt::kernels::cpu

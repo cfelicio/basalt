@@ -71,6 +71,33 @@ bool cpu_avxvnni_ok() {
     return ok;
 }
 
+bool cpu_pdep_ok() {
+    // BMI2, and fast enough to pay for itself: PDEP/PEXT are 3-cycle hardware instructions on Zen 3 and newer and on
+    // every Intel CPU that has BMI2 (Haswell and newer), but AMD Zen 1 and Zen 2 decode them in tens of microcode
+    // cycles, and the AVX2 i-quant rows and the ggml dot products keep their table lookups and scalar bit arithmetic
+    // there.  A CPUID feature bit cannot tell them apart; the vendor string and family can (AMD and Hygon family
+    // 0x19 = Zen 3).  Unknown vendors with BMI2 are left on the scalar path.
+    static const bool ok = [] {
+        if (!cpu_avx2_ok()) return false;
+        unsigned r[4] = {0, 0, 0, 0};
+        platform::cpuid(7, 0, r);
+        if (!((r[1] >> 8) & 1u)) return false;             // BMI2
+        platform::cpuid(0, 0, r);                          // vendor: EBX, EDX, ECX
+        char vendor[13];
+        std::memcpy(vendor + 0, r + 1, 4);
+        std::memcpy(vendor + 4, r + 3, 4);
+        std::memcpy(vendor + 8, r + 2, 4);
+        platform::cpuid(1, 0, r);
+        unsigned fam = (r[0] >> 8) & 0xF;
+        if (fam == 0xF) fam += (r[0] >> 20) & 0xFF;        // extended family
+        if (std::memcmp(vendor, "GenuineIntel", 12) == 0) return true;
+        if (std::memcmp(vendor, "AuthenticAMD", 12) == 0 || std::memcmp(vendor, "HygonGenuine", 12) == 0)
+            return fam >= 0x19;
+        return false;
+    }();
+    return ok;
+}
+
 bool cpu_avxvnni_int8_ok() {
     static const bool ok = [] {
         if (!cpu_avx2_ok()) return false;

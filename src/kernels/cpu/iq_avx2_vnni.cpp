@@ -17,5 +17,6 @@
 
 #define BASALT_IQ_VNNI 1
 #define BASALT_IQ_BMI2 1
+#define BASALT_IQ_IQ4NL 1
 #define BASALT_IQ_EXPORT(name) name##_vnni
 #include "iq_avx2_rows.inc"

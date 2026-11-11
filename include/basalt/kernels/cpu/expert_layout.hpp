@@ -40,6 +40,11 @@ bool cpu_avx512_ok();
 bool cpu_avx2_ok();
 /// Whether this CPU (and its OS) also has the 256-bit AVX-VNNI instructions (`vpdpwssd`, `vpdpbusd`) and BMI2.
 bool cpu_avxvnni_ok();
+/// Whether this CPU (and its OS) has BMI2 with its two bit gather/scatter instructions in hardware (PDEP/PEXT run at
+/// 3 cycles on Zen 3 and newer and on every Intel part that has BMI2, while AMD Zen 1 and Zen 2 decode them in tens
+/// of microcode cycles, so those keep the table lookups): the i-quant rows' BMI2 build (iq_avx2_bmi2.cpp) and the
+/// BMI2 build of the ggml dot products.
+bool cpu_pdep_ok();
 /// Whether this CPU (and its OS) also has the 256-bit AVX-VNNI-INT8 instructions (`vpdpbssd`).
 bool cpu_avxvnni_int8_ok();
 /// Whether this CPU (and its OS) runs AVX (Sandy Bridge and newer): the AVX1 router dot (kq_avx1.cpp).
