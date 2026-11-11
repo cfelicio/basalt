@@ -724,11 +724,6 @@ void iq4nl_rows(const uint8_t* w, size_t row_bytes, int n, const block_q8_0* con
 
 }  // namespace
 
-void BASALT_IQ_EXPORT(iq256_gu_rows)(int type, const uint8_t* blob, size_t gu_row, size_t up_off, int n, const void* const* act, int nt,
-                   float* const* ff, int r0, int r1) {
-    BASALT_IQ_EXPORT(iq256_gu_rows_mode)(rows_mode(), type, blob, gu_row, up_off, n, act, nt, ff, r0, r1);
-}
-
 void BASALT_IQ_EXPORT(iq256_gu_rows_mode)(int mode, int type, const uint8_t* blob, size_t gu_row, size_t up_off, int n,
                                           const void* const* act, int nt, float* const* ff, int r0, int r1) {
     const int m = (type == 18 || type == 21 || type == 22) ? mode : 0;
@@ -746,9 +741,9 @@ void BASALT_IQ_EXPORT(iq256_gu_rows_mode)(int mode, int type, const uint8_t* blo
     }
 }
 
-void BASALT_IQ_EXPORT(iq256_rows)(int type, const uint8_t* w, size_t row_bytes, int n, const void* const* act, int nt, float* const* out,
-                int r0, int r1) {
-    BASALT_IQ_EXPORT(iq256_rows_mode)(rows_mode(), type, w, row_bytes, n, act, nt, out, r0, r1);
+void BASALT_IQ_EXPORT(iq256_gu_rows)(int type, const uint8_t* blob, size_t gu_row, size_t up_off, int n, const void* const* act, int nt,
+                   float* const* ff, int r0, int r1) {
+    BASALT_IQ_EXPORT(iq256_gu_rows_mode)(rows_mode(), type, blob, gu_row, up_off, n, act, nt, ff, r0, r1);
 }
 
 void BASALT_IQ_EXPORT(iq256_rows_mode)(int mode, int type, const uint8_t* w, size_t row_bytes, int n, const void* const* act,
@@ -766,6 +761,11 @@ void BASALT_IQ_EXPORT(iq256_rows_mode)(int mode, int type, const uint8_t* w, siz
         case 23 * 4: dot_rows_nt<23, 0>(nt, w, row_bytes, n, act, out, r0, r1); break;
         default: break;
     }
+}
+
+void BASALT_IQ_EXPORT(iq256_rows)(int type, const uint8_t* w, size_t row_bytes, int n, const void* const* act, int nt, float* const* out,
+                int r0, int r1) {
+    BASALT_IQ_EXPORT(iq256_rows_mode)(rows_mode(), type, w, row_bytes, n, act, nt, out, r0, r1);
 }
 
 #if BASALT_IQ_IQ4NL

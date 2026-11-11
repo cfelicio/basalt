@@ -45,9 +45,13 @@ void iq256_gu_rows_mode_base(int mode, int ggml_type, const uint8_t* blob, size_
                              const void* const* act, int nt, float* const* ff, int r0, int r1);
 void iq256_gu_rows_mode_vnni(int mode, int ggml_type, const uint8_t* blob, size_t gu_row, size_t up_off, int n,
                              const void* const* act, int nt, float* const* ff, int r0, int r1);
+void iq256_gu_rows_mode_bmi2(int mode, int ggml_type, const uint8_t* blob, size_t gu_row, size_t up_off, int n,
+                             const void* const* act, int nt, float* const* ff, int r0, int r1);
 void iq256_rows_mode_base(int mode, int ggml_type, const uint8_t* w, size_t row_bytes, int n, const void* const* act, int nt,
                           float* const* out, int r0, int r1);
 void iq256_rows_mode_vnni(int mode, int ggml_type, const uint8_t* w, size_t row_bytes, int n, const void* const* act, int nt,
+                          float* const* out, int r0, int r1);
+void iq256_rows_mode_bmi2(int mode, int ggml_type, const uint8_t* w, size_t row_bytes, int n, const void* const* act, int nt,
                           float* const* out, int r0, int r1);
 
 /// out[t][r] = w_r . h[t] for IQ4_NL (type 20) rows against Q8_0 activations (ggml's block_q8_0).
