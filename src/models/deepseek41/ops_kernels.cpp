@@ -659,6 +659,9 @@ public:
         }
         auto t = std::make_shared<ExpertTier>(m_);
         const prefillp::Dims d = m_.prompt_dims();
+        uint64_t total_dev_b = 0, free_dev_b = 0;
+        cudaMemGetInfo(&free_dev_b, &total_dev_b);
+        const bool small_gpu = total_dev_b && total_dev_b <= (17ull << 30);
         ExpertTier::Reserve r;
         // the caches of a full context grow into the reserve beside the copies; a prompt borrows the copies
         r.copies = m_.context_bytes() * (uint64_t) m_.sessions() + kModuleRoom;
