@@ -626,6 +626,9 @@ public:
         }
         auto t = std::make_shared<ExpertTier>(m_);
         const prefillp::Dims d = m_.prompt_dims();
+        uint64_t total_dev_b = 0, free_dev_b = 0;
+        cudaMemGetInfo(&free_dev_b, &total_dev_b);
+        const bool small_gpu = total_dev_b && total_dev_b <= (17ull << 30);
         ExpertTier::Reserve r;
         // the caches of a full context grow into the reserve beside the copies; a prompt borrows the copies
         r.copies = m_.context_bytes() * (uint64_t) m_.sessions() + kModuleRoom;
@@ -634,9 +637,11 @@ public:
         const uint64_t prompt_room = std::max(m_.context_bytes() * (uint64_t) m_.sessions() + prefillp::workspace_bytes(d, prefillp::kHomeChunk),
                                               prefillp::workspace_bytes(d, std::min(prefillp::kMaxChunk, ctx_)));
         r.homes = prompt_room + prefillp::ahead_bytes(d) + prefillp::kMargin + kModuleRoom + (m_.pack().vision.bytes ? kVisionRoom : 0);
-        r.beside_homes = prefillp::workspace_bytes(d, prefillp::kShortChunk) + prefillp::kShortMargin;
+        r.beside_homes = small_gpu ? (768ull << 20) : (prefillp::workspace_bytes(d, prefillp::kShortChunk) + prefillp::kShortMargin);
         r.modules = kModuleRoom;
         if (!t->open(r, h_rows_, err)) return false;
+        t->grow();
+        t->report_slots("startup");
         tier_ = t;
         shared = {std::move(t), h_x_, h_rows_};
         return true;

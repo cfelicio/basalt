@@ -237,7 +237,11 @@ public:
             {
                 if (plan_tokens > prefillp::kShortPrompt) release_short_prompt();
                 open_prompt_path(plan_tokens);
-                if (plan_tokens >= kLendTierTokens) {
+                uint64_t total_b = 0, free_b = 0;
+                cudaMemGetInfo(&free_b, &total_b);
+                const bool small_gpu = total_b && total_b <= (17ull << 30);
+                const int lend_threshold = small_gpu ? 2048 : kLendTierTokens;
+                if (plan_tokens >= lend_threshold) {
                     std::string te;
                     if (ExpertTier* t = ops_->expert_tier(te)) t->lend_all();
                 }
@@ -487,6 +491,14 @@ public:
         std::string err;
         if (n_rows > prefillp::kShortPrompt) release_short_prompt();
         open_prompt_path(n_rows);
+        uint64_t total_b = 0, free_b = 0;
+        cudaMemGetInfo(&free_b, &total_b);
+        const bool small_gpu = total_b && total_b <= (17ull << 30);
+        const int lend_threshold = small_gpu ? 2048 : kLendTierTokens;
+        if (n_rows >= lend_threshold) {
+            std::string te;
+            if (ExpertTier* t = ops_->expert_tier(te)) t->lend_all();
+        }
         if (!ops_->ensure_positions(pos + n_rows, err)) return prompt_failed(err);
         if (!prefill_ && !make_prefill_fit(n_rows, err)) {
             std::string te;
@@ -566,7 +578,7 @@ private:
         ExpertTier* t = ops_->expert_tier(e);
         if (!t || prefill_) return;
         short_prompt_ = n_tokens <= prefillp::kShortPrompt;   // its workspaces fit beside the copies
-        if (!short_prompt_) t->shrink();
+        t->shrink();
     }
     void settle_tier() {
         std::string e;

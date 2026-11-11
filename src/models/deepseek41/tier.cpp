@@ -1115,7 +1115,9 @@ void ExpertTier::grow() {
         unread_said_ = true;
         return;
     }
-    const int64_t n = policy::grow_slots(free_b, reserve_ + (token_ > 0 ? 0 : modules_), free_floor_, one_each_, per_layer_, n_expert_, cap_per_layer_);
+    const bool small_gpu = total_b && total_b <= (17ull << 30);
+    const uint64_t room = small_gpu ? 0 : (reserve_ + (token_ > 0 ? 0 : modules_));
+    const int64_t n = policy::grow_slots(free_b, room, free_floor_, one_each_, per_layer_, n_expert_, cap_per_layer_);
     if (n < 1) return;
     std::vector<int64_t> slot_bytes;
     for (int l = 0; l < n_layers_; ++l)
@@ -1142,11 +1144,13 @@ void ExpertTier::report_slots(const char* when) const {
     const int64_t total = per_layer_ + ext_per_layer_;
     uint64_t free_b = 0, total_b = 0;
     std::string why;
-    if (core::device_memory(-1, free_b, total_b, why))
+    if (core::device_memory(-1, free_b, total_b, why)) {
+        const bool small_gpu = total_b && total_b <= (17ull << 30);
+        const uint64_t kept = small_gpu ? free_floor_ : (reserve_ + free_floor_);
         basalt::log::info("basalt deepseek41", "VRAM expert tier %lld of %d experts per layer (%lld base + %lld beside) after %s; %.2f GiB free, %.2f GiB kept for a short read",
                      (long long) total, n_expert_, (long long) per_layer_, (long long) ext_per_layer_, when,
-                     (double) free_b / (1024.0 * 1024.0 * 1024.0), (double) (reserve_ + free_floor_) / (1024.0 * 1024.0 * 1024.0));
-    else
+                     (double) free_b / (1024.0 * 1024.0 * 1024.0), (double) kept / (1024.0 * 1024.0 * 1024.0));
+    } else
         basalt::log::info("basalt deepseek41", "VRAM expert tier %lld of %d experts per layer (%lld base + %lld beside) after %s",
                      (long long) total, n_expert_, (long long) per_layer_, (long long) ext_per_layer_, when);
 }

@@ -189,6 +189,10 @@ int main() {
         CHECK(grow_slots(3000, room, 0, one, 10, 384, 10) == 0);
         CHECK(grow_slots(3000, room, 0, one, 12, 384, 10) == 0);
         CHECK(grow_slots(100000, room, 0, one, 4, 16, -1) == 12);
+        // room = 0: unlocked decode memory above floor on <=16 GiB cards
+        CHECK(grow_slots(1465, 0, 384, 389, 8, 384, -1) == 2);
+        CHECK(grow_slots(1465, 0, 384, 389, 10, 384, -1) == 0);
+        CHECK(grow_slots(1465, 1725, 384, 389, 8, 384, -1) == 0);
         CHECK(reclaim_slots(3000, room, 0, one, 8) == 8);
         CHECK(reclaim_slots(3000, room, 2300, one, 8) == 7);
         CHECK(reclaim_slots(3000, room, 2200, one, 8) == 8);
