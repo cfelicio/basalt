@@ -74,7 +74,6 @@ inline __m256i sc32(int s) { return _mm256_set1_epi16(s); }
 // into BMI2 `shlx` or vectorise the loop into AVX2 (`vpbroadcastb`), which faults on CPUs without them.  ksigns_iq2xs[i] is i's 7 bits plus an even-parity bit 7 (ggml_common.h); a const
 // array is not usable in a constant expression, so the byte is derived the same way here, and
 // native_expert_parity checks these kernels against ggml-cpu's.
-#if !BASALT_IQ_BMI2   // the BMI2 build builds the sign bytes with ksigns8 instead
 struct EvenSigns {
     uint64_t v[128];
     constexpr EvenSigns() : v{} {
@@ -91,7 +90,6 @@ struct EvenSigns {
 static constexpr EvenSigns even_signs{};
 static_assert(even_signs.v[0] == 0x0101010101010101ull && even_signs.v[1] == 0xFF010101010101FFull,
               "keven_signs_q2xs: byte k = 0xFF when bit k of ksigns_iq2xs[i] is set");
-#endif  // !BASALT_IQ_BMI2 (the BMI2 build builds the sign bytes with ksigns8 instead)
 
 inline float hsum8(__m256 v) {
     const __m128 lo = _mm256_castps256_ps128(v), hi = _mm256_extractf128_ps(v, 1);
@@ -372,10 +370,15 @@ inline void row_dot_iq3xxs(const uint8_t* row, int nblocks, const block_q8_K* co
                                                       _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i*) q)), 4);
             const __m256i g1 = _mm256_i32gather_epi32((const int*) iq3xxs_grid,
                                                       _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i*) (q + 8))), 4);
+#if BASALT_IQ_BMI2
+            const __m256i s0 = sgn_vec((uint32_t) ksigns8(w0 & 0x0FFFFFFFu));
+            const __m256i s1 = sgn_vec((uint32_t) ksigns8(w1 & 0x0FFFFFFFu));
+#else
             const __m256i s0 = _mm256_set_epi64x((long long) even_signs.v[(w0 >> 21) & 127], (long long) even_signs.v[(w0 >> 14) & 127],
                                                  (long long) even_signs.v[(w0 >> 7) & 127], (long long) even_signs.v[w0 & 127]);
             const __m256i s1 = _mm256_set_epi64x((long long) even_signs.v[(w1 >> 21) & 127], (long long) even_signs.v[(w1 >> 14) & 127],
                                                  (long long) even_signs.v[(w1 >> 7) & 127], (long long) even_signs.v[w1 & 127]);
+#endif
             group_tokens<NT>(acc, y, i, 64 * j, g0, s0, sc32(2 * (int) (w0 >> 28) + 1), g1, s1, sc32(2 * (int) (w1 >> 28) + 1));
         }
         block_finish<NT>(accf, acc, y, i, h2f(u16(blk)) * Fmt32<18>::K);
