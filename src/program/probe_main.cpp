@@ -47,6 +47,10 @@ struct Fixture {
 };
 const Fixture kFixtures[] = {{"conv", "conv.ids"}, {"struct", "struct.ids"}, {"prose", "prose.ids"}};
 
+// Without --engine / --fixtures: the install's own (an unpacked release has them beside this program), else the build's.
+std::string engine_default() { return default_engine(basalt::platform::module_path(), BASALT_BENCH_ENGINE); }
+std::string fixtures_default() { return default_fixtures(basalt::platform::install_root(), BASALT_BENCH_FIXTURES); }
+
 void usage() {
     std::printf(
         "basalt-probe - measures this machine and prints its rates, decode speeds and suggested values\n"
@@ -54,8 +58,8 @@ void usage() {
         "usage: basalt-probe --model FILE.basalt [-- ENGINE ARGS...]\n"
         "\n"
         "  --model FILE          a .basalt model file\n"
-        "  --engine BIN          engine binary (default: the basalt installed beside this program)\n"
-        "  --fixtures DIR        fixture ids (default: this installation's data/bench, or the model's own folder in it)\n"
+        "  --engine BIN          engine binary (default: basalt beside this program, else the build's)\n"
+        "  --fixtures DIR        fixture ids (default %s, or the model's own folder in it)\n"
         "  --logs DIR            keep the engine log there\n"
         "  --gpu A,B,..|auto     the GPUs, as for the server and the engine (default: GPU 0 alone)\n"
         "  -- ARGS...            engine flags, as for basalt-bench (--kv, --spec, ...)\n"
@@ -63,7 +67,7 @@ void usage() {
         "It runs conv, struct and prose once each (cold: the first request after load counts), %lld tokens each,\n"
         "greedy, then the adaptive tier's settings, each from the start placement. Nothing is saved; a\n"
         "--expert-profile-save file is compared, not written.\n",
-        kTokens);
+        fixtures_default().c_str(), kTokens);
 }
 
 constexpr int kDefaultSwaps = 96;   // the engine's --adapt-swaps default
@@ -213,7 +217,7 @@ int main(int argc, char** argv) {
     basalt::platform::ignore_broken_pipe();
     basalt::platform::install_child_stop_signals();
 
-    std::string engine_bin = o.engine.empty() ? default_engine_bin(BASALT_BENCH_ENGINE) : o.engine;
+    const std::string engine_bin = o.engine.empty() ? engine_default() : o.engine;
     if (engine_bin.empty() || !fs::exists(engine_bin)) {
         basalt::log::error("basalt-probe", "the engine binary %s does not exist (--engine BIN)", engine_bin.c_str());
         return 2;
@@ -229,7 +233,7 @@ int main(int argc, char** argv) {
     if (o.fixtures.empty()) {
         std::string answer;
         (void) engine_plan(engine_bin, {args[0], args[1], "--gpu", "0"}, plan_log, answer);
-        o.fixtures = fixtures_for(default_fixtures_dir(BASALT_BENCH_FIXTURES), answer);
+        o.fixtures = fixtures_for(fixtures_default(), answer);
     }
     {
         std::error_code rm_ec;
