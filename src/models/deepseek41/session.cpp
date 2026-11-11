@@ -240,8 +240,7 @@ public:
                 uint64_t total_b = 0, free_b = 0;
                 cudaMemGetInfo(&free_b, &total_b);
                 const bool small_gpu = total_b && total_b <= (17ull << 30);
-                const int lend_threshold = small_gpu ? 2048 : kLendTierTokens;
-                if (plan_tokens >= lend_threshold) {
+                if (!small_gpu && plan_tokens >= kLendTierTokens) {
                     std::string te;
                     if (ExpertTier* t = ops_->expert_tier(te)) t->lend_all();
                 }
@@ -494,8 +493,7 @@ public:
         uint64_t total_b = 0, free_b = 0;
         cudaMemGetInfo(&free_b, &total_b);
         const bool small_gpu = total_b && total_b <= (17ull << 30);
-        const int lend_threshold = small_gpu ? 2048 : kLendTierTokens;
-        if (n_rows >= lend_threshold) {
+        if (!small_gpu && n_rows >= kLendTierTokens) {
             std::string te;
             if (ExpertTier* t = ops_->expert_tier(te)) t->lend_all();
         }
@@ -530,11 +528,14 @@ private:
         // the reserve stays free through the read: the chunk halves to fit above it
         std::string te;
         const ExpertTier* tier = ops_->expert_tier(te);
+        const bool small_gpu = total_b && total_b <= (17ull << 30);
         const bool beside = short_prompt_;
-        const uint64_t margin = std::max(beside ? prefillp::kShortMargin : prefillp::kMargin, tier ? tier->free_floor() : 0);
+        const uint64_t floor = small_gpu ? std::max<uint64_t>(tier ? tier->free_floor() : 0, 512ull << 20)
+                                         : (tier ? tier->free_floor() : 0);
+        const uint64_t margin = std::max((beside || small_gpu) ? prefillp::kShortMargin : prefillp::kMargin, floor);
         if (beside) tokens = prefillp::kShortChunk;   // these workspaces stay for the next short read, whatever its size
         int max_chunk = prefillp::kMaxChunk;
-        if (total_b && total_b <= (17ull << 30)) {
+        if (small_gpu) {
             max_chunk = std::min(max_chunk, 2048);
         }
         const prefillp::Fit fit = prefillp::plan_chunk(d, free_b, margin, tokens, max_chunk);

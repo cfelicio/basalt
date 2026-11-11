@@ -193,6 +193,12 @@ int main() {
         CHECK(grow_slots(1465, 0, 384, 389, 8, 384, -1) == 2);
         CHECK(grow_slots(1465, 0, 384, 389, 10, 384, -1) == 0);
         CHECK(grow_slots(1465, 1725, 384, 389, 8, 384, -1) == 0);
+        // floor = 512 MiB minimum on Windows & startup slot capping (cap = 10):
+        CHECK(grow_slots(1495, 0, 512, 389, 8, 384, 10) == 2);
+        CHECK(grow_slots(3000, 0, 512, 389, 8, 384, 10) == 2);
+        CHECK(grow_slots(3000, 0, 512, 389, 10, 384, 10) == 0);
+        CHECK(reclaim_slots(1495, 0, 512, 389, 8) == 2);
+        CHECK(reclaim_slots(4500, 0, 512, 389, 8) == 8);
         CHECK(reclaim_slots(3000, room, 0, one, 8) == 8);
         CHECK(reclaim_slots(3000, room, 2300, one, 8) == 7);
         CHECK(reclaim_slots(3000, room, 2200, one, 8) == 8);
