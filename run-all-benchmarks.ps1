@@ -73,18 +73,11 @@ foreach ($zip in $zipFiles) {
 
 function Find-BinaryDir {
     param([string]$Key)
-    $patterns = @(
-        "$BasePath\$Key\bin",
-        "$BasePath\$Key",
-        "$BasePath\*$Key*\bin",
-        "$BasePath\*$Key*"
-    )
-    foreach ($p in $patterns) {
-        $dirs = Get-ChildItem -Path $p -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer }
-        foreach ($d in $dirs) {
-            if (Test-Path (Join-Path $d.FullName "basalt.exe")) { return $d.FullName }
-            if (Test-Path (Join-Path $d.FullName "bin\basalt.exe")) { return (Join-Path $d.FullName "bin") }
-        }
+    $found = Get-ChildItem -Path $BasePath -Filter "basalt.exe" -Recurse -Depth 4 -ErrorAction SilentlyContinue |
+             Where-Object { $_.FullName -match [regex]::Escape($Key) } |
+             Select-Object -First 1
+    if ($found) {
+        return $found.DirectoryName
     }
     return $null
 }
