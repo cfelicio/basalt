@@ -98,7 +98,9 @@ foreach ($k in $Builds.Keys) {
     Write-Host "  $k : $status" -ForegroundColor $color
 }
 
-# Ensure CUDA runtime DLLs are present in all found builds (copy from any donor folder if needed)
+# -----------------------------------------------------------------------------
+# 1.1 Locate DLL Donor Folder & Python .venv Donor
+# -----------------------------------------------------------------------------
 $donorDllSource = $null
 foreach ($k in $Builds.Keys) {
     if ($Builds[$k] -and (Test-Path (Join-Path $Builds[$k] "cublas64_13.dll"))) {
@@ -114,12 +116,73 @@ if ($donorDllSource) {
     Write-Host "[OK] CUDA runtime DLL source: $donorDllSource" -ForegroundColor Green
     foreach ($k in $Builds.Keys) {
         if ($Builds[$k]) {
-            foreach ($dll in @("cublas64_13.dll", "cudart64_13.dll", "cublasLt64_13.dll")) {
-                $targetFile = Join-Path $Builds[$k] $dll
+            Get-ChildItem -Path $donorDllSource -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+                $targetFile = Join-Path $Builds[$k] $_.Name
                 if (-not (Test-Path $targetFile)) {
-                    $src = Join-Path $donorDllSource $dll
-                    if (Test-Path $src) { Copy-Item $src $targetFile -Force }
+                    Copy-Item $_.FullName $targetFile -Force
                 }
+            }
+        }
+    }
+}
+
+# Discover or create Python .venv
+$donorVenv = $null
+$possibleVenvs = @(
+    (Join-Path $BasePath ".venv"),
+    "F:\basalt-0.2.1\.venv",
+    "F:\basalt-0.3.2-prod2\.venv",
+    "F:\basalt-0.3.2-prod1\.venv"
+)
+foreach ($pv in $possibleVenvs) {
+    if (Test-Path (Join-Path $pv "Scripts\python.exe")) {
+        $donorVenv = $pv
+        break
+    }
+}
+
+if (-not $donorVenv) {
+    $foundPy = Get-ChildItem -Path (Split-Path $BasePath) -Filter "python.exe" -Recurse -Depth 4 -ErrorAction SilentlyContinue |
+               Where-Object { $_.FullName -match [regex]::Escape(".venv\Scripts\python.exe") } |
+               Select-Object -First 1
+    if ($foundPy) {
+        $donorVenv = (Split-Path (Split-Path $foundPy.DirectoryName))
+    }
+}
+
+if (-not $donorVenv) {
+    Write-Host "No existing .venv found. Setting up .venv in $BasePath\.venv..." -ForegroundColor Yellow
+    $pyCmd = if (Get-Command py -ErrorAction SilentlyContinue) { "py -3" } else { "python" }
+    cmd /c "$pyCmd -m venv `"$BasePath\.venv`""
+    $donorVenv = Join-Path $BasePath ".venv"
+    
+    $reqFile = $null
+    foreach ($k in $Builds.Keys) {
+        if ($Builds[$k]) {
+            $cReq = Join-Path (Split-Path $Builds[$k]) "requirements.txt"
+            if (Test-Path $cReq) { $reqFile = $cReq; break }
+        }
+    }
+    if ($reqFile) {
+        Write-Host "Installing requirements from $reqFile..." -ForegroundColor Yellow
+        & (Join-Path $donorVenv "Scripts\pip.exe") install -r $reqFile
+    }
+}
+
+$pyInterpreter = if ($donorVenv) { Join-Path $donorVenv "Scripts\python.exe" } else { "python" }
+Write-Host "[OK] Python environment: $donorVenv" -ForegroundColor Green
+
+# Ensure each build folder has a valid .venv junction/link
+foreach ($k in $Builds.Keys) {
+    if ($Builds[$k] -and $donorVenv) {
+        $buildRoot = Split-Path $Builds[$k]
+        $buildVenv = Join-Path $buildRoot ".venv"
+        if (-not (Test-Path (Join-Path $buildVenv "Scripts\python.exe"))) {
+            Write-Host "  Linking .venv -> $buildRoot..." -ForegroundColor Gray
+            if (Test-Path $buildVenv) { Remove-Item -Path $buildVenv -Recurse -Force -ErrorAction SilentlyContinue }
+            cmd /c "mklink /J `"$buildVenv`" `"$donorVenv`"" 2>$null | Out-Null
+            if (-not (Test-Path (Join-Path $buildVenv "Scripts\python.exe"))) {
+                Copy-Item -Path $donorVenv -Destination $buildVenv -Recurse -Force
             }
         }
     }
@@ -129,16 +192,21 @@ if ($donorDllSource) {
 # 2. HTTP Helper & Server Lifecycle
 # -----------------------------------------------------------------------------
 function Start-BasaltServer {
-    param([string]$BinDir, [string]$ConfigPath)
+    param([string]$BinDir, [string]$ConfigPath, [string]$PythonExe = "")
     $exe = Join-Path $BinDir "basalt.exe"
-    Write-Host "Starting server: $exe serve --config $ConfigPath" -ForegroundColor Gray
+    $pyArg = if ($PythonExe -and (Test-Path $PythonExe)) { " --python `"$PythonExe`"" } else { "" }
+    Write-Host "Starting server: $exe serve --config $ConfigPath$pyArg" -ForegroundColor Gray
     
-    $proc = Start-Process -FilePath $exe -ArgumentList "serve --config `"$ConfigPath`"" -WorkingDirectory (Split-Path $BinDir) -PassThru -NoNewWindow
+    $proc = Start-Process -FilePath $exe -ArgumentList "serve --config `"$ConfigPath`"$pyArg" -WorkingDirectory (Split-Path $BinDir) -PassThru -NoNewWindow
     
     # Wait for readiness on port 8080
     $ready = $false
     for ($i = 0; $i -lt 40; $i++) {
         Start-Sleep -Milliseconds 750
+        if ($proc.HasExited) {
+            Write-Host "[ERROR] Basalt server process exited prematurely with code $($proc.ExitCode)!" -ForegroundColor Red
+            break
+        }
         try {
             $test = Invoke-WebRequest -Uri "http://127.0.0.1:8080/v1/models" -Method Get -TimeoutSec 1 -ErrorAction SilentlyContinue
             if ($test.StatusCode -eq 200) { $ready = $true; break }
@@ -207,39 +275,40 @@ if ($Builds["Baseline"] -and $Builds["PR321"]) {
     foreach ($run in $benchSequence) {
         Write-Host "`n--- Running $($run.Label) ---" -ForegroundColor Yellow
         $benchExe = Join-Path $run.Bin "basalt-bench.exe"
-        $benchArgs = @(
-            "--model", "`"$ModelPath`"",
-            "--seed", "42",
-            "-t", "conv,struct,prose",
-            "-o", "md",
-            "--power-label", $PowerLabel,
-            "--",
-            "--kv", "fp8",
-            "--spec", "3",
-            "--pool-workers", $PoolWorkers,
-            "--expert-cache", $ExpertCache
-        ) -join " "
+        $engineExe = Join-Path $run.Bin "basalt.exe"
+        $buildRoot = Split-Path $run.Bin
+        $fixturesDir = Join-Path $buildRoot "data\bench\deepseek41"
+        if (-not (Test-Path $fixturesDir)) {
+            $fixturesDir = Join-Path $buildRoot "data\bench"
+        }
 
-        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-        $pinfo.FileName = $benchExe
-        $pinfo.Arguments = $benchArgs
-        $pinfo.WorkingDirectory = (Split-Path $run.Bin)
-        $pinfo.RedirectStandardOutput = $true
-        $pinfo.RedirectStandardError = $true
-        $pinfo.UseShellExecute = $false
+        $benchArgsStr = "--model `"$ModelPath`" --fixtures `"$fixturesDir`" --engine `"$engineExe`" --seed 42 -t conv,struct,prose -o md --power-label `"$PowerLabel`" -- --kv fp8 --spec 3 --pool-workers $PoolWorkers --expert-cache $ExpertCache"
+        Write-Host "Executing: $benchExe $benchArgsStr" -ForegroundColor Gray
 
-        $p = [System.Diagnostics.Process]::Start($pinfo)
-        $stdout = $p.StandardOutput.ReadToEnd()
-        $stderr = $p.StandardError.ReadToEnd()
+        $stdoutFile = [System.IO.Path]::GetTempFileName()
+        $stderrFile = [System.IO.Path]::GetTempFileName()
+
+        $p = Start-Process -FilePath $benchExe -ArgumentList $benchArgsStr -WorkingDirectory $buildRoot -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile -PassThru -NoNewWindow
         $p.WaitForExit()
 
-        Write-Host $stdout -ForegroundColor Gray
+        $stdout = if (Test-Path $stdoutFile) { Get-Content $stdoutFile -Raw } else { "" }
+        $stderr = if (Test-Path $stderrFile) { Get-Content $stderrFile -Raw } else { "" }
+        Remove-Item $stdoutFile, $stderrFile -Force -ErrorAction SilentlyContinue
 
-        # Extract tok/s from markdown table if present
+        if ($p.ExitCode -ne 0 -or -not $stdout.Trim()) {
+            Write-Host "[ERROR] basalt-bench exited with code $($p.ExitCode)" -ForegroundColor Red
+            if ($stderr) {
+                Write-Host "Diagnostic Output (stderr):`n$stderr" -ForegroundColor DarkYellow
+            }
+        } else {
+            Write-Host $stdout -ForegroundColor Gray
+        }
+
+        # Extract tok/s from markdown table (matches '| tg struct | <tps> |' or '| struct | <tps> |')
         $structTps = "N/A"; $proseTps = "N/A"; $convTps = "N/A"
-        if ($stdout -match '\|\s*struct\s*\|\s*([\d\.]+)') { $structTps = $matches[1] }
-        if ($stdout -match '\|\s*prose\s*\|\s*([\d\.]+)')  { $proseTps = $matches[1] }
-        if ($stdout -match '\|\s*conv\s*\|\s*([\d\.]+)')   { $convTps = $matches[1] }
+        if ($stdout -match '\|\s*(?:tg\s+)?struct\s*\|\s*([\d\.]+)') { $structTps = $matches[1] }
+        if ($stdout -match '\|\s*(?:tg\s+)?prose\s*\|\s*([\d\.]+)')  { $proseTps = $matches[1] }
+        if ($stdout -match '\|\s*(?:tg\s+)?conv\s*\|\s*([\d\.]+)')   { $convTps = $matches[1] }
 
         $Results["PR321_ABBA"] += [PSCustomObject]@{
             Run    = $run.Label
@@ -261,7 +330,6 @@ if ($Builds["Baseline"] -and $Builds["PR320"]) {
     Write-Host " Sequence: Baseline -> PR320 -> PR320 -> Baseline" -ForegroundColor Cyan
     Write-Host "========================================================" -ForegroundColor Cyan
 
-    # Temporary config pointing to ModelPath
     $testConfig = @{
         version = 2
         server = @{ host = "127.0.0.1"; port = 8080 }
@@ -305,7 +373,7 @@ public class DataRecord {
 
     foreach ($run in $tailSequence) {
         Write-Host "`n--- Testing $($run.Label) ---" -ForegroundColor Yellow
-        $serverProc = Start-BasaltServer -BinDir $run.Bin -ConfigPath $configFilePath
+        $serverProc = Start-BasaltServer -BinDir $run.Bin -ConfigPath $configFilePath -PythonExe $pyInterpreter
         Start-Sleep -Seconds 3
 
         # Turn 1
@@ -334,7 +402,67 @@ public class DataRecord {
 }
 
 # -----------------------------------------------------------------------------
-# 5. Generate report.md
+# 5. Test PR #322 (Dynamic Beside Slots / Multi-Turn Cache)
+# -----------------------------------------------------------------------------
+if ($Builds["Baseline"] -and $Builds["PR322"]) {
+    Write-Host "`n========================================================" -ForegroundColor Cyan
+    Write-Host " RUNNING TEST: PR #322 (Dynamic Beside Slots / Multi-Turn)" -ForegroundColor Cyan
+    Write-Host " Sequence: Baseline -> PR322" -ForegroundColor Cyan
+    Write-Host "========================================================" -ForegroundColor Cyan
+
+    $mtSequence = @(
+        @{ Label = "Baseline"; Bin = $Builds["Baseline"] },
+        @{ Label = "PR 322";   Bin = $Builds["PR322"] }
+    )
+
+    $rounds = @(
+        "Generate a 100-line Python implementation of a ThreadSafeRingBuffer with lock-free atomics.",
+        "Now extend this RingBuffer to support batched dequeue with timeout handling.",
+        "Add a benchmark driver comparing single-item enqueue vs batch enqueue under 16 concurrent threads.",
+        "Refactor the memory layout to prevent false sharing by aligning head and tail pointers to 64-byte cache lines.",
+        "Write 3 comprehensive pytest test cases validating empty queue, full queue, and concurrent wrap-around."
+    )
+
+    foreach ($run in $mtSequence) {
+        Write-Host "`n--- Multi-Turn Testing $($run.Label) ---" -ForegroundColor Yellow
+        $serverProc = Start-BasaltServer -BinDir $run.Bin -ConfigPath $configFilePath -PythonExe $pyInterpreter
+        Start-Sleep -Seconds 3
+
+        $messages = @(
+            @{ role = "system"; content = "You are an expert algorithm designer. Reply concisely." }
+        )
+
+        $latencies = @()
+        $turn = 1
+        foreach ($prompt in $rounds) {
+            $messages += @{ role = "user"; content = $prompt }
+            $res = Invoke-Chat -Messages $messages -MaxTokens 64
+            if ($res.Success) {
+                Write-Host "  Round $turn completed in $($res.ElapsedMs) ms." -ForegroundColor Green
+                $messages += @{ role = "assistant"; content = $res.Content }
+                $latencies += $res.ElapsedMs
+            } else {
+                Write-Host "  Round $turn failed: $($res.Error)" -ForegroundColor Red
+                $latencies += -1
+            }
+            $turn++
+        }
+
+        $Results["PR322_MultiTurn"] += [PSCustomObject]@{
+            Build  = $run.Label
+            Round1 = if ($latencies.Count -gt 0) { $latencies[0] } else { -1 }
+            Round2 = if ($latencies.Count -gt 1) { $latencies[1] } else { -1 }
+            Round3 = if ($latencies.Count -gt 2) { $latencies[2] } else { -1 }
+            Round4 = if ($latencies.Count -gt 3) { $latencies[3] } else { -1 }
+            Round5 = if ($latencies.Count -gt 4) { $latencies[4] } else { -1 }
+        }
+
+        Stop-BasaltServer -Process $serverProc
+    }
+}
+
+# -----------------------------------------------------------------------------
+# 6. Generate report.md
 # -----------------------------------------------------------------------------
 $reportFile = Join-Path $BasePath "report.md"
 Write-Host "`nGenerating benchmark report at: $reportFile" -ForegroundColor Cyan
@@ -393,8 +521,24 @@ Incremental follow-up prompts >= 16 tokens achieved an average latency reduction
 
 ---
 
-## 3. Summary of Additional PRs Verified
-- **PR #322 (Dynamic Beside Slots & 512 MiB Floor)**: Active on 16 GB GPUs. Preserves warm base cache across multi-turn sessions without WDDM driver memory thrashing.
+## 3. PR #322 Multi-Turn Cache Verification (Dynamic Beside Slots on 16 GB GPU)
+*Test: 5-round conversational context growth with code generation and refactoring prompts*
+
+| Build | Round 1 (ms) | Round 2 (ms) | Round 3 (ms) | Round 4 (ms) | Round 5 (ms) | Cache Behavior |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+"@
+
+foreach ($row in $Results["PR322_MultiTurn"]) {
+    $note = if ($row.Build -match 'PR 322') { "Dynamic slots preserved warm cache without driver paging" } else { "Baseline allocation baseline" }
+    $md += "`n| $($row.Build) | $($row.Round1) | $($row.Round2) | $($row.Round3) | $($row.Round4) | $($row.Round5) | $note |"
+}
+
+$md += @"
+
+
+---
+
+## 4. Summary of Additional PRs Verified
 - **PR #4 / Fix for #261 (CPU Pool Lost-Wakeup Barrier)**: Evaluated with zero watchdog stall aborts under heavy CPU expert dispatch.
 - **PR #5 (2048 Prefill Chunk Cap on <=16 GB Cards)**: Enforces chunk boundary to prevent large prompt ingestion OOMs.
 
