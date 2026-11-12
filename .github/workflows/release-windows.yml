@@ -1,0 +1,180 @@
+name: release-windows
+
+# The Windows binaries: a Release build for compute capability 12.0, packaged with the CUDA and MSVC runtime
+# libraries so a graphics driver is all a user has to install, and the folder that START-HERE.bat runs in.
+# A tag (v0.2.1-win1) publishes the zip as a release asset; a manual run builds the zip as a workflow artifact,
+# and can publish it to the release for the checked-out ref. The engine itself is compiled and CPU-tested by
+# ci.yml on every pull request (Linux and Windows); this workflow only packages.
+on:
+  push:
+    branches:
+      - main
+      - clean-v0.3.2-production
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "also publish the zip to the GitHub Release for this ref"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  CUDA_VERSION: "13.0.2"
+  ARCH: "120"
+
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0        # git describe names the version from the tags
+
+      - name: CUDA toolkit
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
+        with:
+          cuda: ${{ env.CUDA_VERSION }}
+          method: network
+          # cublas and cudart are the runtime libraries the engine loads at start; the _dev packages are what
+          # the build links against, and nvrtc is not used by the engine
+          sub-packages: '["nvcc", "cudart", "crt", "nvvm", "cublas_dev", "nvrtc_dev", "visual_studio_integration"]'
+          use-github-cache: true
+
+      - name: MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+
+      - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        continue-on-error: true      # the cache is a speed-up; a failed ccache download must not stop the build
+        with:
+          key: release-windows-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: windows-2022-
+          max-size: 1G
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Version
+        id: v
+        run: |
+          # a fork carries no upstream tags, so the version comes from CMakeLists plus the commit; a pushed
+          # tag is the version, and is what the release is named for
+          base="$(sed -n 's/^project(basalt VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt)"
+          sha="$(git rev-parse --short HEAD)"
+          if [ "$GITHUB_REF" != "${GITHUB_REF#refs/tags/}" ]; then
+            v="${GITHUB_REF_NAME#v}"; tag="$GITHUB_REF_NAME"
+          else
+            v="${base:-0.0.0}-dev$sha"; tag=""
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "building $v${tag:+ for release $tag}"
+
+      - name: Configure
+        run: |
+          launchers=()
+          if command -v ccache >/dev/null 2>&1; then
+            launchers=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+                       -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache)
+          fi
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_CUDA_ARCHITECTURES=${ARCH} \
+            "${launchers[@]}" \
+            -DPython3_EXECUTABLE="$(python -c 'import sys;print(sys.executable.replace(chr(92),"/"))')"
+
+      - name: Build
+        run: cmake --build build -j "$(nproc)" -- -k 0
+
+      - name: The shipped programs are linked
+        run: |
+          # the shipped programs are linked into <source>/bin (RUNTIME_OUTPUT_DIRECTORY in CMakeLists)
+          for p in basalt basalt-bench basalt-probe basalt-vision; do test -s "bin/$p.exe" && echo "built bin/$p.exe"; done
+
+      - name: AVX-512 stays inside the dispatched kernels
+        run: python tools/check_isa_isolation.py build
+
+      - name: CUDA runtime DLLs from NVIDIA's redist
+        shell: pwsh
+        run: ./tools/windows/fetch_cuda_redist.ps1 -Version '${{ env.CUDA_VERSION }}' -OutDir cuda-redist
+
+      - name: Package
+        shell: pwsh
+        run: ./tools/windows/package.ps1 -SourceDir . -BuildDir build -OutDir dist -CudaRedistDir cuda-redist -Version '${{ steps.v.outputs.version }}'
+
+      - name: The zip is complete
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist/basalt-*.zip
+          if (-not ('System.IO.Compression.ZipFile' -as [type])) { Add-Type -AssemblyName System.IO.Compression.FileSystem }
+          $z = [System.IO.Compression.ZipFile]::OpenRead($zip.FullName)
+          $names = $z.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
+          foreach ($need in 'bin/basalt.exe', 'bin/cudart64_13.dll', 'bin/cublas64_13.dll', 'bin/cublasLt64_13.dll',
+                           'serve/server.py',
+                           'data/profiles', 'data/bench', 'tools/windows/setup_basalt.py',
+                           'START-HERE.bat', 'TUNE-HERE.bat', 'basalt-helper.ps1', 'requirements.txt',
+                           'VERSION', 'README-WINDOWS.md') {
+            if (-not ($names | Where-Object { $_ -like "*/$need" -or $_ -like "*/$need/*" })) {
+              Write-Error "the zip has no $need"; $z.Dispose(); exit 1
+            }
+          }
+          $z.Dispose()
+          "zip: $([math]::Round($zip.Length / 1MB, 1)) MiB, $($names.Count) files"
+          Get-Content "$($zip.FullName).SHA256SUMS"
+
+      - name: The packaged engine answers, with no CUDA on PATH
+        shell: pwsh
+        run: |
+          # unpack the zip as a user would, then run the engine with the toolkit off PATH: the libraries beside
+          # the binary are all it may have
+          $zip = Get-ChildItem dist/basalt-*.zip | Select-Object -First 1
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath dist/smoke -Force
+          $root = (Get-ChildItem dist/smoke -Directory | Select-Object -First 1).FullName
+          Get-ChildItem (Join-Path $root 'bin') | ForEach-Object { "  bin\{0}  {1:N1} MiB" -f $_.Name, ($_.Length / 1MB) }
+          $env:PATH = 'C:\Windows\System32;C:\Windows'
+          & (Join-Path $root 'bin\basalt.exe') --help | Select-Object -First 3
+          if ($LASTEXITCODE -ne 0) { throw "the packaged engine exited $LASTEXITCODE with CUDA off PATH" }
+
+      - name: Artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: basalt-${{ steps.v.outputs.version }}-windows-x64-cuda13
+          path: |
+            dist/basalt-*.zip
+            dist/basalt-*.zip.SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish to the release
+        if: github.ref_type == 'tag' || inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          zip="$(ls dist/basalt-*.zip | head -1)"
+          sums="$zip.SHA256SUMS"
+          if [ -n "$TAG" ]; then
+            gh release create "$TAG" --verify-tag --title "Basalt $TAG (Windows x64, CUDA 13, sm_120)" \
+              --notes "Windows x64 binaries for compute capability 12.0 (RTX 50 series, RTX PRO Blackwell), built \
+            by release-windows.yml from $GITHUB_SHA. Unpack anywhere, run START-HERE.bat. SHA-256 in $(basename "$sums")." \
+              --latest "$zip" "$sums" 2>/dev/null ||
+            gh release upload "$TAG" "$zip" "$sums" --clobber
+            rel="$TAG"
+          else
+            # a manual run with publish: the newest release of this repository
+            rel="$(gh release view --latest --json tagName -q .tagName)"
+            gh release upload "$rel" "$zip" "$sums" --clobber
+          fi
+          gh release view "$rel" --json tagName,assets --jq '.tagName, (.assets[].name)'
