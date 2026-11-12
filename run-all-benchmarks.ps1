@@ -593,12 +593,12 @@ $md += @"
 "@
 
 $baseRuns = @($Results["PR320_ABBA"] | Where-Object { $_.Run -match 'Baseline' } | ForEach-Object { [double]$_.Turn2_Ms })
-$candRuns = @($Results["PR320_ABBA"] | Where-Object { $_.Run -match 'PR 320' }   | ForEach-Object { [double]$_.Turn2_Ms })
+$candRuns = @($Results["PR320_ABBA"] | Where-Object { $_.Run -match 'Candidate|PR 320' }   | ForEach-Object { [double]$_.Turn2_Ms })
 $baseAvg = if ($baseRuns.Count -gt 0) { ($baseRuns | Measure-Object -Average).Average } else { 1.0 }
 $candAvg = if ($candRuns.Count -gt 0) { ($candRuns | Measure-Object -Average).Average } else { 1.0 }
 
 foreach ($row in $Results["PR320_ABBA"]) {
-    $note = if ($row.Run -match 'PR 320') { "$([math]::Round($baseAvg / [math]::Max($row.Turn2_Ms, 1), 2))x faster" } else { "-" }
+    $note = if ($row.Run -match 'Candidate|PR 320') { "$([math]::Round($baseAvg / [math]::Max($row.Turn2_Ms, 1), 2))x faster" } else { "-" }
     $md += "`n| $($row.Run) | $(if ($row.Run -match 'Baseline') { 'Baseline' } else { 'Candidate (PR #320)' }) | $($row.Turn1_Ms) | $($row.Turn2_Ms) | $note |"
 }
 
