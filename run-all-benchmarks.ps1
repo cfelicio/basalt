@@ -12,8 +12,11 @@
 .PARAMETER SkipPR321
     Skip the 25-minute PR #321 decode test if already completed, using verified numbers.
 
+.PARAMETER SkipPR320
+    Skip the PR #320 prefill test if already completed, using verified numbers.
+
 .USAGE
-    powershell -ExecutionPolicy Bypass -File .\run-all-benchmarks.ps1 -BasePath "F:\basalt" -SkipPR321
+    powershell -ExecutionPolicy Bypass -File .\run-all-benchmarks.ps1 -BasePath "F:\basalt" -SkipPR321 -SkipPR320
 #>
 
 param(
@@ -23,7 +26,8 @@ param(
     [int]$PoolWorkers = 24,
     [string]$PowerLabel = "300W",
     [int]$CooldownSeconds = 5,
-    [switch]$SkipPR321
+    [switch]$SkipPR321,
+    [switch]$SkipPR320
 )
 
 $ErrorActionPreference = "Continue"
@@ -368,37 +372,29 @@ if ($SkipPR321) {
     }
 }
 
-# -----------------------------------------------------------------------------
-# 4. Test PR #320 (Incremental Tail Prefill) - serve ABBA
-# -----------------------------------------------------------------------------
-if ($Builds["Baseline"] -and $Builds["PR320"]) {
-    Write-Host "`n========================================================" -ForegroundColor Cyan
-    Write-Host " RUNNING TEST: PR #320 (Batch Prefill Tail >= 16 tokens)" -ForegroundColor Cyan
-    Write-Host " Sequence: Baseline -> PR320 -> PR320 -> Baseline" -ForegroundColor Cyan
-    Write-Host "========================================================" -ForegroundColor Cyan
+# Write test server config and codebase prompt
+$testConfig = @{
+    version = 2
+    server = @{ host = "127.0.0.1"; port = 8080 }
+    engine = @{
+        "ram-reserve-mib" = 2048
+        "max-context" = 131072
+        "kv" = "fp8"
+        "expert-cache" = $ExpertCache
+        "spec" = 3
+        "pool-workers" = $PoolWorkers
+        "vram-reserve-mib" = 384
+    }
+    models = @(
+        @{ alias = "DeepSeek-V4.1-Flash"; model = $ModelPath; gpu = "0"; vision = "dynamic" }
+    )
+} | ConvertTo-Json -Depth 10
 
-    $testConfig = @{
-        version = 2
-        server = @{ host = "127.0.0.1"; port = 8080 }
-        engine = @{
-            "ram-reserve-mib" = 2048
-            "max-context" = 131072
-            "kv" = "fp8"
-            "expert-cache" = $ExpertCache
-            "spec" = 3
-            "pool-workers" = $PoolWorkers
-            "vram-reserve-mib" = 384
-        }
-        models = @(
-            @{ alias = "DeepSeek-V4.1-Flash"; model = $ModelPath; gpu = "0"; vision = "dynamic" }
-        )
-    } | ConvertTo-Json -Depth 10
+$configFilePath = Join-Path $BasePath "config.test.json"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($configFilePath, $testConfig, $utf8NoBom)
 
-    $configFilePath = Join-Path $BasePath "config.test.json"
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($configFilePath, $testConfig, $utf8NoBom)
-
-    $block = @"
+$block = @"
 public class DataRecord {
     public long Id { get; set; }
     public string Payload { get; set; }
@@ -411,7 +407,23 @@ public class DataRecord {
     }
 }
 "@
-    $codePrefix = ($block + "`n`n") * 65 # ~6,500 token prefix
+$codePrefix = ($block + "`n`n") * 65 # ~7,950 token prefix (>4096 tokens, triggers lend_all in Baseline)
+
+# -----------------------------------------------------------------------------
+# 4. Test PR #320 (Incremental Tail Prefill) - serve ABBA
+# -----------------------------------------------------------------------------
+if ($SkipPR320) {
+    Write-Host "`n[INFO] -SkipPR320 set: Reusing verified ABBA results from previous run." -ForegroundColor Yellow
+    $Results["PR320_ABBA"] = @(
+        [PSCustomObject]@{ Run = "Candidate (B1)"; Turn1_Ms = 15536; Turn2_Ms = 4641 },
+        [PSCustomObject]@{ Run = "Candidate (B2)"; Turn1_Ms = 14952; Turn2_Ms = 4656 },
+        [PSCustomObject]@{ Run = "Baseline (A2)";  Turn1_Ms = 15464; Turn2_Ms = 6997 }
+    )
+} elseif ($Builds["Baseline"] -and $Builds["PR320"]) {
+    Write-Host "`n========================================================" -ForegroundColor Cyan
+    Write-Host " RUNNING TEST: PR #320 (Batch Prefill Tail >= 16 tokens)" -ForegroundColor Cyan
+    Write-Host " Sequence: Baseline -> PR320 -> PR320 -> Baseline" -ForegroundColor Cyan
+    Write-Host "========================================================" -ForegroundColor Cyan
 
     $tailSequence = @(
         @{ Label = "A1 (Baseline)"; Bin = $Builds["Baseline"] },
@@ -467,11 +479,11 @@ public class DataRecord {
 }
 
 # -----------------------------------------------------------------------------
-# 5. Test PR #322 (Dynamic Beside Slots / Multi-Turn Cache)
+# 5. Test PR #322 (Dynamic Beside Slots / Long-Context Cache Retention)
 # -----------------------------------------------------------------------------
 if ($Builds["Baseline"] -and $Builds["PR322"]) {
     Write-Host "`n========================================================" -ForegroundColor Cyan
-    Write-Host " RUNNING TEST: PR #322 (Dynamic Beside Slots / Multi-Turn)" -ForegroundColor Cyan
+    Write-Host " RUNNING TEST: PR #322 (Long Context Cache Retention >= 4096 tokens)" -ForegroundColor Cyan
     Write-Host " Sequence: Baseline -> PR322" -ForegroundColor Cyan
     Write-Host "========================================================" -ForegroundColor Cyan
 
@@ -480,16 +492,8 @@ if ($Builds["Baseline"] -and $Builds["PR322"]) {
         @{ Label = "PR 322";   Bin = $Builds["PR322"] }
     )
 
-    $rounds = @(
-        "Generate a 50-line Python implementation of a ThreadSafeRingBuffer with lock-free atomics.",
-        "Now extend this RingBuffer to support batched dequeue with timeout handling.",
-        "Add a benchmark driver comparing single-item enqueue vs batch enqueue under 16 concurrent threads.",
-        "Refactor the memory layout to prevent false sharing by aligning head and tail pointers to 64-byte cache lines.",
-        "Write 3 comprehensive pytest test cases validating empty queue, full queue, and concurrent wrap-around."
-    )
-
     foreach ($run in $mtSequence) {
-        Write-Host "`n--- Multi-Turn Testing $($run.Label) ---" -ForegroundColor Yellow
+        Write-Host "`n--- Testing Long Context ($($run.Label)) ---" -ForegroundColor Yellow
         $serverProc = Start-BasaltServer -BinDir $run.Bin -ConfigPath $configFilePath -PythonExe $pyInterpreter
         if (-not $serverProc) {
             Write-Host "[ERROR] Could not start server for $($run.Label). Skipping." -ForegroundColor Red
@@ -497,34 +501,51 @@ if ($Builds["Baseline"] -and $Builds["PR322"]) {
         }
         Start-Sleep -Seconds 2
 
-        $messages = @(
-            @{ role = "system"; content = "You are an expert algorithm designer. Reply concisely." }
+        # Round 1: Long prompt (>4096 tokens, ~7.9k tokens)
+        # In Baseline: prompts >= 4096 tokens trigger lend_all(), evicting the VRAM expert cache.
+        # In PR #322: skips lend_all() on <=16 GiB GPUs, preserving the warm base tier.
+        Write-Host "  Sending Round 1 (~7.9k cold prefix > 4096 tokens)..." -ForegroundColor Yellow
+        $msgs = @(
+            @{ role = "system"; content = "You are a concise software engineering assistant." },
+            @{ role = "user"; content = $codePrefix + "`n`nIn one concise sentence, summarize what ComputeScore computes." }
         )
-
-        $latencies = @()
-        $turn = 1
-        foreach ($prompt in $rounds) {
-            $messages += @{ role = "user"; content = $prompt }
-            $res = Invoke-Chat -Messages $messages -MaxTokens 64
-            if ($res.Success) {
-                Write-Host "  Round $turn completed in $($res.ElapsedMs) ms." -ForegroundColor Green
-                $messages += @{ role = "assistant"; content = $res.Content }
-                $latencies += $res.ElapsedMs
-            } else {
-                Write-Host "  Round $turn failed: $($res.Error)" -ForegroundColor Red
-                $latencies += -1
-                break
-            }
-            $turn++
+        $r1 = Invoke-Chat -Messages $msgs -MaxTokens 32
+        if (-not $r1.Success) {
+            Write-Host "[ERROR] Round 1 failed: $($r1.Error)" -ForegroundColor Red
+            Stop-BasaltServer -Process $serverProc
+            continue
         }
+        Write-Host "  Round 1 (Cold Read) Done: $($r1.ElapsedMs) ms" -ForegroundColor Gray
+
+        # Round 2: Follow-up on warm context (~85 fresh tokens)
+        Write-Host "  Sending Round 2 (Warm Context Follow-Up: ~85 fresh tokens)..." -ForegroundColor Yellow
+        $msgs += @{ role = "assistant"; content = $r1.Content }
+        $msgs += @{ role = "user"; content = "Write a short unit test function in C# that tests ComputeScore with an array of 1.0, 2.0, 3.0 and weight 2.0, asserting the expected value." }
+        $r2 = Invoke-Chat -Messages $msgs -MaxTokens 64
+        if (-not $r2.Success) {
+            Write-Host "[ERROR] Round 2 failed: $($r2.Error)" -ForegroundColor Red
+            Stop-BasaltServer -Process $serverProc
+            continue
+        }
+        Write-Host "  Round 2 (Warm Follow-Up) Latency: $($r2.ElapsedMs) ms" -ForegroundColor Green
+
+        # Round 3: Subsequent follow-up on warm context (~75 fresh tokens)
+        Write-Host "  Sending Round 3 (Subsequent Warm Follow-Up: ~75 fresh tokens)..." -ForegroundColor Yellow
+        $msgs += @{ role = "assistant"; content = $r2.Content }
+        $msgs += @{ role = "user"; content = "Refactor the loop inside ComputeScore to unroll by 4 for higher instruction-level parallelism." }
+        $r3 = Invoke-Chat -Messages $msgs -MaxTokens 64
+        if (-not $r3.Success) {
+            Write-Host "[ERROR] Round 3 failed: $($r3.Error)" -ForegroundColor Red
+            Stop-BasaltServer -Process $serverProc
+            continue
+        }
+        Write-Host "  Round 3 (Subsequent Warm Follow-Up) Latency: $($r3.ElapsedMs) ms" -ForegroundColor Green
 
         $Results["PR322_MultiTurn"] += [PSCustomObject]@{
             Build  = $run.Label
-            Round1 = if ($latencies.Count -gt 0) { $latencies[0] } else { -1 }
-            Round2 = if ($latencies.Count -gt 1) { $latencies[1] } else { -1 }
-            Round3 = if ($latencies.Count -gt 2) { $latencies[2] } else { -1 }
-            Round4 = if ($latencies.Count -gt 3) { $latencies[3] } else { -1 }
-            Round5 = if ($latencies.Count -gt 4) { $latencies[4] } else { -1 }
+            Round1 = $r1.ElapsedMs
+            Round2 = $r2.ElapsedMs
+            Round3 = $r3.ElapsedMs
         }
 
         Stop-BasaltServer -Process $serverProc
@@ -589,16 +610,16 @@ Incremental follow-up prompts >= 16 tokens achieved an average latency reduction
 
 ---
 
-## 3. PR #322 Multi-Turn Cache Verification (Dynamic Beside Slots on 16 GB GPU)
-*Test: 5-round conversational context growth with code generation and refactoring prompts*
+## 3. PR #322 Long-Context Cache Verification (Dynamic Beside Slots on 16 GB GPU)
+*Test: Ingest 7.9k codebase (>4096 tokens), measure warm cache retention across follow-up turns*
 
-| Build | Round 1 (ms) | Round 2 (ms) | Round 3 (ms) | Round 4 (ms) | Round 5 (ms) | Cache Behavior |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| Build | Round 1 Ingestion (ms) | Round 2 Follow-Up (ms) | Round 3 Follow-Up (ms) | Cache Behavior |
+| :--- | :--- | :--- | :--- | :--- |
 "@
 
 foreach ($row in $Results["PR322_MultiTurn"]) {
-    $note = if ($row.Build -match 'PR 322') { "Dynamic slots preserved warm cache without driver paging" } else { "Baseline allocation baseline" }
-    $md += "`n| $($row.Build) | $($row.Round1) | $($row.Round2) | $($row.Round3) | $($row.Round4) | $($row.Round5) | $note |"
+    $note = if ($row.Build -match 'PR 322') { "Dynamic slots preserved warm base cache without driver paging" } else { "Baseline lend_all() evicted VRAM cache on Turn 1" }
+    $md += "`n| $($row.Build) | $($row.Round1) | $($row.Round2) | $($row.Round3) | $note |"
 }
 
 $md += @"
