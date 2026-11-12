@@ -229,8 +229,10 @@ function Start-BasaltServer {
     # Wait for full model readiness on port 8080 (deepseek41 loads 153 GB into RAM, ~150s)
     $ready = $false
     Write-Host "Waiting for model weights to load into RAM & GPU..." -ForegroundColor Yellow
-    for ($i = 0; $i -lt 300; $i++) {
-        Start-Sleep -Seconds 1
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $lastReportSec = 0
+    while ($sw.Elapsed.TotalSeconds -lt 450) {
+        Start-Sleep -Milliseconds 750
         $proc.Refresh()
         if ($proc.HasExited) {
             Write-Host "[ERROR] Basalt server process exited prematurely with code $($proc.ExitCode)!" -ForegroundColor Red
@@ -240,16 +242,17 @@ function Start-BasaltServer {
             $resp = Invoke-RestMethod -Uri "http://127.0.0.1:8080/health" -Method Get -TimeoutSec 1 -ErrorAction SilentlyContinue
             if ($resp -and $resp.loaded -eq $true) {
                 $ready = $true
-                Write-Host "`n[OK] Model weights fully loaded and server ready on port 8080!" -ForegroundColor Green
+                Write-Host "`n[OK] Model weights fully loaded and server ready on port 8080 ($([math]::Round($sw.Elapsed.TotalSeconds, 1))s)!" -ForegroundColor Green
                 break
             }
-            if ($resp -and $resp.percent -and ($i % 15 -eq 0)) {
-                Write-Host "  Load progress: $($resp.percent)%" -ForegroundColor Gray
+            if ($resp -and $resp.percent -and ($sw.Elapsed.TotalSeconds - $lastReportSec -ge 15)) {
+                $lastReportSec = $sw.Elapsed.TotalSeconds
+                Write-Host "  Load progress: $($resp.percent)% ($([math]::Round($sw.Elapsed.TotalSeconds, 0))s elapsed)" -ForegroundColor Gray
             }
         } catch {}
     }
     if (-not $ready) {
-        Write-Host "[WARNING] Server failed to fully load weights within 300s." -ForegroundColor Red
+        Write-Host "[WARNING] Server failed to fully load weights within 450s." -ForegroundColor Red
         Stop-BasaltServer -Process $proc
         return $null
     }
@@ -339,20 +342,20 @@ if ($SkipPR321) {
             if ($stderr) {
                 Write-Host "Diagnostic Output (stderr):`n$stderr" -ForegroundColor DarkYellow
             }
-        } elseif ($stdout.Trim()) {
+        } elseif ($stdout -and $stdout.Trim()) {
             Write-Host $stdout -ForegroundColor Gray
         }
 
         # Extract tok/s from markdown table or stderr progress
         $structTps = "N/A"; $proseTps = "N/A"; $convTps = "N/A"
-        if ($stdout -match '\|\s*(?:tg\s+)?struct\s*\|\s*([\d\.]+)') { $structTps = $matches[1] }
-        elseif ($stderr -match 'run\s+1\s+struct\s+([\d\.]+)\s+tok/s') { $structTps = $matches[1] }
+        if ($stdout -and ($stdout -match '\|\s*(?:tg\s+)?struct\s*\|\s*([\d\.]+)')) { $structTps = $matches[1] }
+        elseif ($stderr -and ($stderr -match 'run\s+1\s+struct\s+([\d\.]+)\s+tok/s')) { $structTps = $matches[1] }
 
-        if ($stdout -match '\|\s*(?:tg\s+)?prose\s*\|\s*([\d\.]+)')  { $proseTps = $matches[1] }
-        elseif ($stderr -match 'run\s+1\s+prose\s+([\d\.]+)\s+tok/s')  { $proseTps = $matches[1] }
+        if ($stdout -and ($stdout -match '\|\s*(?:tg\s+)?prose\s*\|\s*([\d\.]+)'))  { $proseTps = $matches[1] }
+        elseif ($stderr -and ($stderr -match 'run\s+1\s+prose\s+([\d\.]+)\s+tok/s'))  { $proseTps = $matches[1] }
 
-        if ($stdout -match '\|\s*(?:tg\s+)?conv\s*\|\s*([\d\.]+)')   { $convTps = $matches[1] }
-        elseif ($stderr -match 'run\s+1\s+conv\s+([\d\.]+)\s+tok/s')   { $convTps = $matches[1] }
+        if ($stdout -and ($stdout -match '\|\s*(?:tg\s+)?conv\s*\|\s*([\d\.]+)'))   { $convTps = $matches[1] }
+        elseif ($stderr -and ($stderr -match 'run\s+1\s+conv\s+([\d\.]+)\s+tok/s'))   { $convTps = $matches[1] }
 
         $Results["PR321_ABBA"] += [PSCustomObject]@{
             Run    = $run.Label
@@ -568,12 +571,10 @@ $md += @"
 | :--- | :--- | :--- | :--- | :--- |
 "@
 
-$baseAvg = 1; $candAvg = 1
-$t2Values = $Results["PR320_ABBA"] | ForEach-Object { $_.Turn2_Ms }
-if ($t2Values.Count -eq 4) {
-    $baseAvg = ($t2Values[0] + $t2Values[3]) / 2.0
-    $candAvg = ($t2Values[1] + $t2Values[2]) / 2.0
-}
+$baseRuns = @($Results["PR320_ABBA"] | Where-Object { $_.Run -match 'Baseline' } | ForEach-Object { [double]$_.Turn2_Ms })
+$candRuns = @($Results["PR320_ABBA"] | Where-Object { $_.Run -match 'PR 320' }   | ForEach-Object { [double]$_.Turn2_Ms })
+$baseAvg = if ($baseRuns.Count -gt 0) { ($baseRuns | Measure-Object -Average).Average } else { 1.0 }
+$candAvg = if ($candRuns.Count -gt 0) { ($candRuns | Measure-Object -Average).Average } else { 1.0 }
 
 foreach ($row in $Results["PR320_ABBA"]) {
     $note = if ($row.Run -match 'PR 320') { "$([math]::Round($baseAvg / [math]::Max($row.Turn2_Ms, 1), 2))x faster" } else { "-" }
