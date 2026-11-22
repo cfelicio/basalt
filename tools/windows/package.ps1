@@ -129,7 +129,7 @@ Copy-Tree (Join-Path $SourceDir 'docs')  (Join-Path $root 'docs')
 if (-not (Test-Path -LiteralPath (Join-Path $root 'tools\migrations\config_v1_to_v2.py'))) {
     throw 'the release needs tools\migrations\config_v1_to_v2.py (the server names it in its v1 refusal)'
 }
-foreach ($f in 'START-HERE.bat', 'requirements.txt', 'LICENSE', 'THIRD_PARTY_LICENSES') {
+foreach ($f in 'START-HERE.bat', 'test-basalt-models.ps1', 'requirements.txt', 'LICENSE', 'THIRD_PARTY_LICENSES') {
     if (-not (Test-Path -LiteralPath (Join-Path $SourceDir $f))) { throw "the release needs $f and it is not in $SourceDir" }
     Copy-Item -LiteralPath (Join-Path $SourceDir $f) -Destination $root -Force
 }
